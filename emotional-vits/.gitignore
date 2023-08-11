@@ -1,0 +1,15 @@
+logs
+.ipynb_checkpoints
+.*.swp
+__pycache__
+build
+*.c
+monotonic_align
+configs
+filelists*
+checkpoint*
+*.wav
+*.scp
+*.log
+web_api/test
+sat

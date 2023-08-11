@@ -16,7 +16,7 @@ def strftime():
 
 def tts_proc(tcp_server_socket, buffer_size, work, rank, loglv=0):
     sys.path.insert(0, os.path.abspath('..'))
-    from evits import DialTTS
+    from vits_wrap import VITSWrap
     #torch.cuda.set_device(rank)
     if torch.cuda.is_available():
         device = torch.device(f"cuda:{rank}")
@@ -25,7 +25,7 @@ def tts_proc(tcp_server_socket, buffer_size, work, rank, loglv=0):
 
     func_name = f"tts_proc: work{work}(pid={os.getpid()})"
     print(f"{strftime()} {func_name}, load tts model@{device} ...")
-    tts = DialTTS(device=device)
+    tts = VITSWrap(device=device)
     print(f"{strftime()} {func_name}, load tts model@{device} done!")
     print(f"{strftime()} {func_name}, ckpt root={tts.speecher.res_root_path}")
 
@@ -154,9 +154,9 @@ if __name__ == "__main__":
     loglv = 0
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--host', '-i', type=str, required=False, default='127.0.0.1',
+    parser.add_argument('--host', type=str, required=False, default='127.0.0.1',
                         help='What host IP to listen to. (default=localhost)')
-    parser.add_argument('--port', '-p', type=int, required=False, default=5959,
+    parser.add_argument('--port', type=int, required=False, default=5959,
                         help='Port to serve TTServer on. Pass 0 to request an unused port selected by the operation system. (default=5959)')
     parser.add_argument('--n-gpus', '-n', type=int, required=False, default=num_gpus,
                         help='Number of GPUs to used. (default={})'.format(num_gpus))            

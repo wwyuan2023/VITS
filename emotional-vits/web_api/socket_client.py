@@ -2,7 +2,7 @@
 
 import os, sys
 import socket
-import struct, pickle, json
+import struct, pickle
 import time
 import argparse
 
@@ -37,23 +37,73 @@ def synthesize(inputs, remote=('localhost', 5959), tcp_client_socket=None, retur
     return items
 
 if __name__ == "__main__":
-
-    inputs = {
-        "text": "这是1个测试用例。this is a test sample.",
-        "spkid": 674,
-        "volume": 1.0,
-        "speed": 1.0,
-        "pitch": 1.0,
-    }
-    print("To synthesize:\n", inputs)
-    outputs = synthesize(inputs)
-    if outputs is None:
-        print("Synthesis failure!")
+        
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--host', type=str, required=False, default='127.0.0.1',
+                        help='What TTServer IP to connect to. (default=localhost)')
+    parser.add_argument('--port', type=int, required=False, default=5959,
+                        help='Port to serve TTServer on. (default=5959)')
+    parser.add_argument('--utterance', '-u', type=str, required=False,
+                        help='Input utterance with UTF-8 encoding to synthesize.')
+    parser.add_argument('--textfile', '-t', type=str, required=False,
+                        help='Input text file with UTF-8 encoding to synthesize.')
+    parser.add_argument('--spkid', '-s', type=int, required=False, default=1,
+                        help='Set speaker ID. (default=1)')
+    parser.add_argument('--volume', '-v', type=float, required=False, default=1.0,
+                        help='Set volume, its range is (0.0, 1.0]. (default=1.0)')
+    parser.add_argument('--speed', '-s', type=float, required=False, default=1.0,
+                        help='Set speed, its range is (0.5, 1.0]. (default=1.0)')
+    parser.add_argument('--pitch', '-p', type=float, required=False, default=1.0,
+                        help='Set pitch, its range is (0.0, 1.0]. (default=1.0)')
+    parser.add_argument('--sampling-rate', '-r', type=int, required=False,
+                        help='Set sampling rate.')
+    parser.add_argument('--outdir', '-o', type=str, required=True,
+                        help='Directory for saving synthetic wav.')
+    args = parser.parse_args()
     
-    wav = outputs.pop('wav')
-    dur = outputs.pop('dur')
-    print(outputs)
-    with open('./a.wav', 'wb') as f:
-        f.write(wav)
+    # check args
+    if args.utterance is None or args.textfile is None:
+        raise ValueError("Please specify either --utterance or --textfile")
+    
+    if not os.path.exists(args.outdir):
+        os.makedirs(args.outdir)
+    
+    # remote addr
+    host, port = args.host, int(args.port)
+    remote = (host, port)
+    print(f"Remote = {remote}")
+    
+    # pack inputs
+    inputs = {
+        "spkid": args.spkid,
+        "volume": args.volume,
+        "speed": args.speed,
+        "pitch": args.pitch,
+    }
+    
+    utt_text = []
+    if args.utterance is not None:
+        utt_text.append(args.utterance)
+    if args.textfile is not None:
+        with open(args.textfile, 'rt') as f:
+            for line in f:
+                line = line.strip()
+                if len(line) == 0: continue
+                utt_text.append(line)
+    
+    # syntheize
+    for idx, text in enumerate(utt_text, 1):
+        inputs["text"] = text
+        print("To synthesize:\n", inputs)
+        outputs = synthesize(inputs)
+        if outputs is None:
+            print("Synthesis failure!")
+            continue
+    
+        wav = outputs.pop('wav')
+        print(outputs)
+        with open(os.path.join(args.outdir, f"{idx:06d}.wav"), 'wb') as f:
+            f.write(wav)
+    
     print("Done!")
 

@@ -9,7 +9,7 @@ import torch
 from librosa import resample
 
 from textparser import TextParser
-from infer import EVITS
+from infer import EmoVITS
 
 
 def _genWavHeader(sampleNum, sampleRate=8000, bitNum=16):
@@ -25,10 +25,10 @@ def _genWavHeader(sampleNum, sampleRate=8000, bitNum=16):
     return wavHeadInfo
 
 
-class DialTTS(object):
+class VITSWrap(object):
 
     # global configuration
-    default_spkid = 678
+    default_spkid = 1
     default_volume = 1.0
     default_speed = 1.0
     default_pitch = 1.0
@@ -42,9 +42,9 @@ class DialTTS(object):
         self.loglv = loglv
 
         self.textparser = TextParser(loglv=loglv)
-        self.speecher = EVITS(ckpt_path, device=device)
+        self.speecher = EmoVITS(ckpt_path, device=device)
         
-        self.sampling_rate = self.speecher.sampling_rate
+        self.default_sampling_rate = self.speecher.sampling_rate
         self.max_utt_length = self.textparser.max_utt_length
 
         if self.loglv > 0:
@@ -63,10 +63,12 @@ class DialTTS(object):
         volume = float(inputs.get('volume', self.default_volume))
         speed = float(inputs.get('speed', self.default_speed))
         pitch = float(inputs.get('pitch', self.default_pitch))
+        sampling_rate = int(inputs.get('sampling_rate', self.default_sampling_rate))
 
         volume = max(0., min(1., volume))
         speed = max(0.5, min(2., speed))
         pitch = max(0.5, min(2., pitch))
+        sampling_rate = max(48000, min(8000, sampling_rate))
 
         speed /= pitch
 
@@ -75,11 +77,12 @@ class DialTTS(object):
         spkid = int(inputs.get('spkid', self.default_spkid))
         emotion = inputs.get('emotion')
 
-        return inputs, utt_id, utt_text, spkid, volume, speed, pitch, emotion
+        return inputs, utt_id, utt_text, spkid, volume, speed, pitch, sampling_rate, emotion
 
-    def _handle_outputs(self, inputs, wav_bytes, segtext_str, time_used_frontend, time_used_backend, rtf):
+    def _handle_outputs(self, inputs, wav_bytes, sampling_rate, segtext_str, time_used_frontend, time_used_backend, rtf):
         outputs = inputs
-        outputs['wav'] = _genWavHeader(len(wav_bytes)//2, self.sampling_rate, 16) + wav_bytes
+        outputs['wav'] = _genWavHeader(len(wav_bytes)//2, sampling_rate, 16) + wav_bytes
+        outputs['sr'] = sampling_rate
         outputs['segtext'] = segtext_str
         outputs['time_used_frontend'] = time_used_frontend * 1000  # ms
         outputs['time_used_backend'] = time_used_backend * 1000  # ms
@@ -155,7 +158,7 @@ class DialTTS(object):
 
     @torch.no_grad()
     def speaking(self, inputs : dict) -> dict:
-        inputs, utt_id, utt_text, spkid, volume, speed, pitch, emotion = \
+        inputs, utt_id, utt_text, spkid, volume, speed, pitch, sampling_rate, emotion = \
             self._parse_input(inputs)
         
         batch_utt_id, batch_utt_text = self._split_utt_text(utt_id, utt_text)
@@ -173,57 +176,91 @@ class DialTTS(object):
             wav, emotion = self.speecher.infer(spkid, utt_vector, emotion, duration_rate=speed)
             batch_wavlen += len(wav)
             if pitch != 1.0:
-                wav = resample(wav, orig_sr=int(self.sampling_rate/pitch), target_sr=self.sampling_rate)
+                wav = resample(wav, orig_sr=int(self.default_sampling_rate/pitch), target_sr=self.default_sampling_rate)
+            if sampling_rate != self.default_sampling_rate:
+                wav = resample(wav, orig_sr=self.default_sampling_rate, target_sr=sampling_rate)
             wav = np.clip(wav * volume * 32767, -32768, 32767).astype(np.int16)
             batch_wav.append(wav)
             end = time.time()
             time_used_backend += end - start
         
-        rtf = (time_used_frontend + time_used_backend) / (batch_wavlen / self.sampling_rate)
+        rtf = (time_used_frontend + time_used_backend) / (batch_wavlen / self.default_sampling_rate)
         batch_wav_bytes = bytes()
         for idx, wav in enumerate(batch_wav, 1):
             batch_wav_bytes += wav.tobytes()
 
         outputs = self._handle_outputs(
-            inputs, batch_wav_bytes, batch_segtext, time_used_frontend, time_used_backend, rtf)
+            inputs, batch_wav_bytes, sampling_rate, batch_segtext, time_used_frontend, time_used_backend, rtf)
         return outputs
 
 
 
 if __name__ == "__main__":
-
-    mytts = DialTTS(device='cuda', loglv=1)
     
-    # spkid, volume, speed, pitch, emotion, suffix, text
-    batch_inputs = [
-        [678, 1.0, 1.0, 1.0, (678, 0), "", "这是一个测试用例1"],
-        [678, 1.0, 1.0, 1.0, (678, 0), "", "这是一个测试用例2"],
-    ]
-
-    for idx, batch in enumerate(batch_inputs, 1):
-        inputs = {
-            "spkid": batch[0],
-            "volume": batch[1],
-            "speed": batch[2],
-            "pitch": batch[3],
-            "emotion": batch[4],
-            "text": batch[-1],
-        }
-        outputs = mytts.speaking(inputs)
+    import argparse
+    
+    loglv = 1
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--device', type=str, required=False, default="cpu",
+                        help='Use cuda or cpu. (default="cpu")')
+    parser.add_argument('--utterance', '-u', type=str, required=False,
+                        help='Input utterance with UTF-8 encoding to synthesize.')
+    parser.add_argument('--textfile', '-t', type=str, required=False,
+                        help='Input text file with UTF-8 encoding to synthesize.')
+    parser.add_argument('--spkid', '-s', type=int, required=False, default=1,
+                        help='Set speaker ID. (default=1)')
+    parser.add_argument('--volume', '-v', type=float, required=False, default=1.0,
+                        help='Set volume, its range is (0.0, 1.0]. (default=1.0)')
+    parser.add_argument('--speed', '-s', type=float, required=False, default=1.0,
+                        help='Set speed, its range is (0.5, 1.0]. (default=1.0)')
+    parser.add_argument('--pitch', '-p', type=float, required=False, default=1.0,
+                        help='Set pitch, its range is (0.0, 1.0]. (default=1.0)')
+    parser.add_argument('--sampling-rate', '-r', type=int, required=False,
+                        help='Set sampling rate.')
+    parser.add_argument('--outdir', '-o', type=str, required=True,
+                        help='Directory for saving synthetic wav.')
+    parser.add_argument('--loglv', '-d', type=int, required=False, default=loglv,
+                        help='Log level. (default={})'.format(loglv))
+    args = parser.parse_args()
+    
+    # check args
+    if args.utterance is None or args.textfile is None:
+        raise ValueError("Please specify either --utterance or --textfile")
+    
+    if not os.path.exists(args.outdir):
+        os.makedirs(args.outdir)
+        
+    # construct tts instance
+    mytts = VITSWrap(device=args.device, loglv=args.loglv)
+    
+    # pack inputs
+    inputs = {
+        "spkid": args.spkid,
+        "volume": args.volume,
+        "speed": args.speed,
+        "pitch": args.pitch,
+    }
+    
+    utt_text = []
+    if args.utterance is not None:
+        utt_text.append(args.utterance)
+    if args.textfile is not None:
+        with open(args.textfile, 'rt') as f:
+            for line in f:
+                line = line.strip()
+                if len(line) == 0: continue
+                utt_text.append(line)
+    
+    # syntheize
+    for idx, text in enumerate(utt_text, 1):
+        inputs["text"] = text
+        print("To synthesize:\n", inputs)
+        outputs = mytts.speaking(inputs)    
         wav = outputs.pop('wav')
-        suffix = "" if len(batch[5]) == 0 else f"-{batch[5]}"
-        outfn = os.path.join('output', f"{idx:04d}{suffix}.wav")
-        with open(outfn, 'wb') as f:
+        print(outputs)
+        with open(os.path.join(args.outdir, f"{idx:06d}.wav"), 'wb') as f:
             f.write(wav)
-        segtext = outputs.pop('segtext')
-        print(f"input={batch}, wav={outfn}, segtext={segtext}")
-
-        # spkid == 1
-        # Neutral 0
-        # Happy 7
-        # Angry 14
-        # Sad 21
-        # Fear 28
-        # Surprise 35
-        # Disgusting 42
+    
+    print("Done!")
         

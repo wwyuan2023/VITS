@@ -9,7 +9,7 @@ import utils
 from export import load_model
 from commons import infer_path
 
-class EVITS(object):
+class EmoVITS(object):
     def __init__(self, checkpoint_path=None, device=None, *, loglv=0):
         self.loglv = loglv
 
@@ -194,7 +194,7 @@ def main():
     """Run decoding process."""
     parser = argparse.ArgumentParser(
         description="Decode dumped features with trained Neural TTS Generator "
-                    "(See detail in dialtts/speecher/bin/infer.py).")
+                    "(See detail in VITS/emotional-vits/infer.py).")
     parser.add_argument("--scpfn", "--scp", type=str, required=True,
                         help="feats.scp file. ")
     parser.add_argument("--spk-id", "--spk", default=None, type=int,
@@ -230,7 +230,7 @@ def main():
         os.makedirs(args.outdir)
 
     # setup model
-    model = EVITS(args.checkpoint, args.config, loglv=1)
+    model = EmoVITS(args.checkpoint, args.config, loglv=1)
 
     # get feature files
     features = dict()

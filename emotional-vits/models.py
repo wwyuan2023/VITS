@@ -18,7 +18,7 @@ from commons import init_weights, get_padding, gen_sin_table
 
 
 class DurationPredictor(nn.Module):
-    def __init__(self, in_channels, filter_channels, kernel_size, p_dropout, gin_channels=0):
+    def __init__(self, in_channels, filter_channels, kernel_size=5, p_dropout=0.5, gin_channels=0):
         super().__init__()
 
         self.in_channels = in_channels
@@ -26,41 +26,33 @@ class DurationPredictor(nn.Module):
         self.kernel_size = kernel_size
         self.p_dropout = p_dropout
         self.gin_channels = gin_channels
+        
+        self.cond = nn.Linear(gin_channels, 256)
 
         self.drop = nn.Dropout(p_dropout)
         self.pre = nn.Conv1d(in_channels, filter_channels, 1)
-        self.conv_1 = nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)
         self.norm_1 = modules.LayerNorm(filter_channels)
-        self.conv_2 = nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)
+        self.resblock = modules.ResBlock2(filter_channels, kernel_size, (1,3,5), gin_channels=256)
         self.norm_2 = modules.LayerNorm(filter_channels)
         self.proj = nn.Conv1d(filter_channels, 1, 1)
 
-        self.cond = nn.Linear(gin_channels, filter_channels)
-
     def forward(self, x, x_mask, g):
         x, g = torch.detach(x), torch.detach(g)
-        x = self.pre(x) + self.cond(g).unsqueeze(-1)
-        x = self.conv_1(x * x_mask)
-        x = F.silu(x)
-        x = self.norm_1(x)
-        x = self.drop(x)
-        x = self.conv_2(x * x_mask)
-        x = F.silu(x)
-        x = self.norm_2(x)
-        x = self.drop(x)
+        g = self.cond(g)
+        x = self.drop(self.norm_1(self.pre(x)))
+        x = self.resblock(x, x_mask, g=g)
+        x = self.drop(self.norm_2(x))
         x = self.proj(x * x_mask)
         return x * x_mask
 
     def infer(self, x, g):
-        x = self.pre(x) + self.cond(g).unsqueeze(-1)
-        x = self.conv_1(x)
-        x = F.silu(x)
-        x = self.norm_1(x)
-        x = self.conv_2(x)
-        x = F.silu(x)
+        g = self.cond(g)
+        x = self.norm_1(self.pre(x))
+        x = self.resblock.infer(x, g=g)
         x = self.norm_2(x)
         x = self.proj(x)
         return x
+
 
 class TextEncoder(nn.Module):
     def __init__(self,
@@ -72,6 +64,7 @@ class TextEncoder(nn.Module):
         n_layers,
         kernel_size,
         p_dropout,
+        gin_channels=0
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -88,6 +81,16 @@ class TextEncoder(nn.Module):
             nn.LayerNorm(hidden_channels),
         )
         self.emo_proj = nn.Linear(1024, hidden_channels)
+        
+        self.spk_proj = nn.Linear(gin_channels, hidden_channels)
+        self.spk_adaptor = nn.Sequential(
+            nn.Conv1d(hidden_channels, hidden_channels, 1, groups=1),
+            nn.ReLU(), modules.LayerNorm(hidden_channels), nn.Dropout(p_dropout),
+            nn.Conv1d(hidden_channels, hidden_channels, 7, groups=4),
+            nn.ReLU(), modules.LayerNorm(hidden_channels), nn.Dropout(p_dropout),
+            nn.Conv1d(hidden_channels, hidden_channels, 1, groups=1),
+            nn.ReLU(), modules.LayerNorm(hidden_channels), nn.Dropout(p_dropout),
+        )
 
         # positional encoding
         self.register_buffer(
@@ -119,7 +122,7 @@ class TextEncoder(nn.Module):
         x = x * self.xscale + pe * alpha
         return x
 
-    def forward(self, x, x_lengths, emo):
+    def forward(self, x, x_lengths, emo, g):
         x = self.emb(x) # [b, t, h]
         x = x + self.emo_proj(emo).unsqueeze(1)
         x = self.positional_encoding(x, self.alpha)
@@ -127,18 +130,22 @@ class TextEncoder(nn.Module):
         x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
 
         x = self.encoder(x * x_mask, x_mask)
-        stats = self.proj(x) * x_mask
+        h = x + self.spk_proj(g).unsqueeze(2) # [b, h, t]
+        h = self.spk_adaptor(h * x_mask) * x_mask
+        stats = self.proj(x + h) * x_mask
 
         m, logs = torch.split(stats, self.out_channels, dim=1)
         return x, m, logs, x_mask
     
-    def infer(self, x, emo):
+    def infer(self, x, emo, g):
         x = self.emb(x)  # [b, t, h]
         x = x + self.emo_proj(emo).unsqueeze(1)
         x = self.positional_encoding(x, self.alpha)
         x = torch.transpose(x, 1, -1) # [b, h, t]
         x = self.encoder.infer(x)
-        stats = self.proj(x)
+        h = x + self.spk_proj(g).unsqueeze(2) # [b, h, t]
+        h = self.spk_adaptor(h)
+        stats = self.proj(x + h)
 
         m, logs = torch.split(stats, self.out_channels, dim=1)
         return x, m, logs
@@ -425,7 +432,7 @@ class SynthesizerTrn(nn.Module):
         self.dec = Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
         self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16, gin_channels=0)
         self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, 1, 4, gin_channels=gin_channels)
-        self.dp = DurationPredictor(hidden_channels, 256, 3, 0.5, gin_channels=gin_channels)
+        self.dp = DurationPredictor(hidden_channels, 256, 5, p_dropout=0.25, gin_channels=gin_channels)
 
         assert n_speakers > 1
         self.emb_g = nn.Embedding(n_speakers, gin_channels)
@@ -441,7 +448,7 @@ class SynthesizerTrn(nn.Module):
 
     def forward(self, x, x_lengths, y, y_lengths, emo, sid=None):
         g = self.emb_g(sid) # [b, h]
-        x, m_p, logs_p, x_mask = self.enc_p(x, x_lengths, emo)
+        x, m_p, logs_p, x_mask = self.enc_p(x, x_lengths, emo, g=g)
 
         z, m_q, logs_q, y_mask = self.enc_q(y, y_lengths, g=None)
         z_p = self.flow(z, y_mask, g=g)
@@ -479,7 +486,7 @@ class SynthesizerTrn(nn.Module):
 
     def inference(self, x, x_lengths, emo, sid=None, noise_scale=1, length_scale=1, max_len=None):
         g = self.emb_g(sid) # [b, h]
-        x, m_p, logs_p, x_mask = self.enc_p(x, x_lengths, emo)
+        x, m_p, logs_p, x_mask = self.enc_p(x, x_lengths, emo, g=g)
 
         logw = self.dp(x, x_mask, g=g)
         w = torch.exp(logw) * x_mask * length_scale
@@ -502,7 +509,7 @@ class SynthesizerTrn(nn.Module):
         assert x.size(0) == 1
         x_lengths = x.size(1)
         g = self.emb_g(sid) # [b, h]
-        x, m_p, logs_p = self.enc_p.infer(x, emo)
+        x, m_p, logs_p = self.enc_p.infer(x, emo, g=g)
 
         logw = self.dp.infer(x, g=g)
         w = torch.exp(logw) * length_scale
@@ -522,7 +529,7 @@ class SynthesizerTrn(nn.Module):
     def infer_p1(self, x, emo, sid):
         assert x.size(0) == 1
         g = self.emb_g(sid) # [b, h]
-        x, m_p, logs_p = self.enc_p.infer(x, emo)
+        x, m_p, logs_p = self.enc_p.infer(x, emo, g=g)
         s_p = torch.exp(logs_p)
 
         logw = self.dp.infer(x, g=g)

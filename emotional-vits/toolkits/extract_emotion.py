@@ -71,7 +71,7 @@ def process_func(
     # then we put it on the device
     y = processor(x, sampling_rate=sampling_rate)
     y = y['input_values'][0]
-    y = torch.from_numpy(y).to(device)
+    y = torch.from_numpy(y).to(device).view(1, -1)
 
     # run through model
     with torch.no_grad():
@@ -85,6 +85,7 @@ def process_func(
 
 def extract_emotion(wavfn, outdir):
     wav, sr = librosa.load(wavfn, sr=16000)
+    wav /= max(abs(wav))
     emb = process_func(np.expand_dims(wav, 0), sr, embeddings=True)
     outfn = os.path.join(outdir, os.path.basename(wavfn).replace('.wav', '.emo'))
     emb.flatten().tofile(outfn)
@@ -96,11 +97,12 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Emotion Extraction Preprocess')
     parser.add_argument('--scp', nargs="+", type=str, required=True, help='path of the filelists or wave files')
-    parser.add_argument('--outdir', type=str, required=True, help='output directory')
+    parser.add_argument('--outdir', type=str, required=False, help='output directory')
     args = parser.parse_args()
     
-    if not os.path.exists(args.outdir):
-        os.makedirs(args.outdir)
+    outdir = args.outdir
+    if outdir is not None and not os.path.exists(outdir):
+        os.makedirs(outdir)
 
     wavlist = []
     for file in args.scp:
@@ -117,6 +119,7 @@ if __name__ == '__main__':
     print("-----start emotion extract-----")
     for idx, wavfn in enumerate(wavlist):
         sys.stdout.write(f"extract from {wavfn} ... ")
-        extract_emotion(wavfn, args.outdir)
+        outdir = os.path.dirname(wavfn) if args.outdir is None else args.outdir
+        extract_emotion(wavfn, outdir)
         sys.stdout.write("done!\n")
     print("-----end emotion extract-----")

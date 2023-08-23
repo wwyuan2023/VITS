@@ -39,9 +39,9 @@ class DurationPredictor(nn.Module):
     def forward(self, x, x_mask, g):
         x, g = torch.detach(x), torch.detach(g)
         g = self.cond(g)
-        x = self.drop(self.norm_1(self.pre(x)))
+        x = self.norm_1(self.drop(self.pre(x)))
         x = self.resblock(x, x_mask, g=g)
-        x = self.drop(self.norm_2(x))
+        x = self.norm_2(self.drop(x))
         x = self.proj(x * x_mask)
         return x * x_mask
 
@@ -82,16 +82,6 @@ class TextEncoder(nn.Module):
         )
         self.emo_proj = nn.Linear(1024, hidden_channels)
         
-        self.spk_proj = nn.Linear(gin_channels, hidden_channels)
-        self.spk_adaptor = nn.Sequential(
-            nn.Conv1d(hidden_channels, hidden_channels, 1, groups=1),
-            nn.ReLU(), modules.LayerNorm(hidden_channels), nn.Dropout(p_dropout),
-            nn.Conv1d(hidden_channels, hidden_channels, 7, groups=4),
-            nn.ReLU(), modules.LayerNorm(hidden_channels), nn.Dropout(p_dropout),
-            nn.Conv1d(hidden_channels, hidden_channels, 1, groups=1),
-            nn.ReLU(), modules.LayerNorm(hidden_channels), nn.Dropout(p_dropout),
-        )
-
         # positional encoding
         self.register_buffer(
             "sin_table",
@@ -108,8 +98,12 @@ class TextEncoder(nn.Module):
             n_layers,
             kernel_size,
             p_dropout,
+            gin_channels=gin_channels,
         )
-        self.proj= nn.Conv1d(hidden_channels, out_channels * 2, 1)
+        self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
+        
+        nn.init.xavier_uniform_(self.emo_proj.weight)
+        nn.init.xavier_uniform_(self.proj.weight)
     
     def positional_encoding(self, x, alpha):
         # x: (B,T,d)
@@ -129,10 +123,8 @@ class TextEncoder(nn.Module):
         x = torch.transpose(x, 1, -1) # [b, h, t]
         x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
 
-        x = self.encoder(x * x_mask, x_mask)
-        h = x + self.spk_proj(g).unsqueeze(2) # [b, h, t]
-        h = self.spk_adaptor(h * x_mask) * x_mask
-        stats = self.proj(x + h) * x_mask
+        x = self.encoder(x * x_mask, x_mask, g=g)
+        stats = self.proj(x) * x_mask
 
         m, logs = torch.split(stats, self.out_channels, dim=1)
         return x, m, logs, x_mask
@@ -142,10 +134,8 @@ class TextEncoder(nn.Module):
         x = x + self.emo_proj(emo).unsqueeze(1)
         x = self.positional_encoding(x, self.alpha)
         x = torch.transpose(x, 1, -1) # [b, h, t]
-        x = self.encoder.infer(x)
-        h = x + self.spk_proj(g).unsqueeze(2) # [b, h, t]
-        h = self.spk_adaptor(h)
-        stats = self.proj(x + h)
+        x = self.encoder.infer(x, g=g)
+        stats = self.proj(x)
 
         m, logs = torch.split(stats, self.out_channels, dim=1)
         return x, m, logs
@@ -428,7 +418,7 @@ class SynthesizerTrn(nn.Module):
         self.n_speakers = n_speakers
         self.gin_channels = gin_channels
 
-        self.enc_p = TextEncoder(text_channels, inter_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout)
+        self.enc_p = TextEncoder(text_channels, inter_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout, gin_channels=gin_channels)
         self.dec = Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
         self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16, gin_channels=0)
         self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, 1, 4, gin_channels=gin_channels)

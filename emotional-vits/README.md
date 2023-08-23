@@ -11,6 +11,8 @@ pip install -r requirments.txt
 cd monotonic_align/
 python setup.py build_ext --inplace
 # cp -r build/lib.linux-x86_64-cpython-310/monotonic_align/ .
+# 直接安装
+pip install monotonic-align
 
 ```
 

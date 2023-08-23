@@ -22,6 +22,8 @@
     "data": {
         "training_files":"filelists/train.scp",
         "validation_files":"filelists/valid.scp",
+        "max_text_len": 384,
+        "max_wav_len": 192000,
         "text_channels": 256,
         "sampling_rate": 16000,
         "filter_length": 1024,
@@ -36,7 +38,7 @@
     "model": {
         "inter_channels": 192,
         "hidden_channels": 256,
-        "filter_channels": 768,
+        "filter_channels": 512,
         "n_heads": 2,
         "n_layers": 6,
         "kernel_size": 5,

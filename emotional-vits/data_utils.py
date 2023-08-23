@@ -24,11 +24,13 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         self.hop_length = hparams.data.hop_length
         self.win_length = hparams.data.win_length
 
-        self.min_text_len = getattr(hparams.data, "min_text_len", 3)
-        self.max_text_len = getattr(hparams.data, "max_text_len", 255)
-
         self.text_channels = hparams.data.text_channels
         self.segment_size = hparams.train.segment_size
+        
+        self.min_text_len = getattr(hparams.data, "min_text_len", 2)
+        self.max_text_len = getattr(hparams.data, "max_text_len", 384)
+        self.min_wav_len = max(self.segment_size, getattr(hparams.data, "min_wav_len", 0))
+        self.max_wav_len = getattr(hparams.data, "max_wav_len", 10*self.sampling_rate)
 
         random.seed(1234)
         random.shuffle(self.filepaths_sid)
@@ -47,7 +49,7 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         for vecfn, wavfn, emofn, sid in self.filepaths_sid:
             vec = load_binfn(vecfn, self.text_channels)
             wav, sr = load_wav_to_torch(wavfn)
-            if self.min_text_len <= len(vec) <= self.max_text_len and len(wav) > self.segment_size:
+            if self.min_text_len < len(vec) < self.max_text_len and self.min_wav_len < len(wav) < self.max_wav_len:
                 filepaths_sid_new.append([vecfn, wavfn, emofn, sid])
                 lengths.append(len(wav) // self.hop_length)
         self.filepaths_sid = filepaths_sid_new

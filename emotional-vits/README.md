@@ -6,12 +6,6 @@
 ## 1. 安装依赖
 ```
 pip install -r requirments.txt
-
-# 编译MAS
-cd monotonic_align/
-python setup.py build_ext --inplace
-# cp -r build/lib.linux-x86_64-cpython-310/monotonic_align/ .
-# 直接安装
 pip install monotonic-align
 
 ```

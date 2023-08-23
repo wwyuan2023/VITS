@@ -396,6 +396,8 @@ class SynthesizerTrn(nn.Module):
         upsample_kernel_sizes,
         n_speakers=0,
         gin_channels=0,
+        align_noise=0.01,
+        align_noise_decay=2e-6,
         **kwargs):
 
         super().__init__()
@@ -417,6 +419,8 @@ class SynthesizerTrn(nn.Module):
         self.segment_size = segment_size
         self.n_speakers = n_speakers
         self.gin_channels = gin_channels
+        self.align_noise = align_noise_decay
+        self.align_noise_decay = align_noise_decay
 
         self.enc_p = TextEncoder(text_channels, inter_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout, gin_channels=gin_channels)
         self.dec = Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
@@ -451,6 +455,10 @@ class SynthesizerTrn(nn.Module):
             neg_cent3 = torch.matmul(z_p.transpose(1, 2), (m_p * s_p_sq_r)) # [b, t_t, d] x [b, d, t_s] = [b, t_t, t_s]
             neg_cent4 = torch.sum(-0.5 * (m_p ** 2) * s_p_sq_r, [1], keepdim=True) # [b, 1, t_s]
             neg_cent = neg_cent1 + neg_cent2 + neg_cent3 + neg_cent4
+            if self.align_noise > 0:
+                epsilon = torch.std(neg_cent) * torch.randn_like(neg_cent) * self.align_noise
+                neg_cent = neg_cent + epsilon
+                self.align_noise -= self.align_noise_decay
 
             attn_mask = torch.unsqueeze(x_mask, 2) * torch.unsqueeze(y_mask, -1)
             attn = monotonic_align.maximum_path(neg_cent, attn_mask.squeeze(1)).detach()

@@ -397,7 +397,7 @@ class SynthesizerTrn(nn.Module):
         n_speakers=0,
         gin_channels=0,
         align_noise=0.01,
-        align_noise_decay=2e-6,
+        align_noise_decay=1e-6,
         **kwargs):
 
         super().__init__()
@@ -419,7 +419,7 @@ class SynthesizerTrn(nn.Module):
         self.segment_size = segment_size
         self.n_speakers = n_speakers
         self.gin_channels = gin_channels
-        self.align_noise = align_noise_decay
+        self.align_noise = align_noise
         self.align_noise_decay = align_noise_decay
 
         self.enc_p = TextEncoder(text_channels, inter_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout, gin_channels=gin_channels)

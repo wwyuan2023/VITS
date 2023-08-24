@@ -25,6 +25,52 @@ class LayerNorm(nn.Module):
         return x.transpose(1, -1)
 
 
+class ConditionalLayerNorm(nn.Module):
+
+    __constants__ = ['input_size', 'embed_size', 'eps']
+    input_size: int
+    embed_size: int
+    eps: float
+
+    def __init__(
+        self,
+        input_size,
+        embed_size,
+        eps=1e-5,
+    ):
+        super(ConditionalLayerNorm, self).__init__()
+
+        self.input_size = input_size
+        self.embed_size = embed_size
+        self.eps = eps
+        self.scale_layer = nn.Linear(embed_size, input_size, bias=True)
+        self.bias_layer = nn.Linear(embed_size, input_size, bias=True)
+        
+        self.reset_parameters()
+        self.infer = self.forward
+
+    def reset_parameters(self):
+        nn.init.uniform_(self.scale_layer.weight, -1, 1)
+        nn.init.uniform_(self.bias_layer.weight, -1, 1)
+        nn.init.zeros_(self.scale_layer.bias)
+        nn.init.zeros_(self.bias_layer.bias)
+
+    def forward(self, x, s):
+        # input: (B, C, T)
+        # s: speaker embeded, (B, C)
+        x = x.transpose(1, -1)
+        y = F.layer_norm(x, (self.input_size,), eps=self.eps)
+
+        scale = self.scale_layer(s)
+        bias = self.bias_layer(s)
+        y = y * scale.unsqueeze(1) + bias.unsqueeze(1)  # (B, T, C)
+
+        return y.transpose(1, -1) # (B, C, T)
+
+    def extra_repr(self):
+        return '{input_size}, embed_size={embed_size}, eps={eps}'.format(**self.__dict__)
+
+
 class WN(nn.Module):
     def __init__(self, hidden_channels, kernel_size, dilation_rate, n_layers, gin_channels=0, p_dropout=0):
         super(WN, self).__init__()

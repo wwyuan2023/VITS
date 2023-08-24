@@ -278,7 +278,6 @@ def main():
         wav, _ = model.infer(spkid, text, emo)  # (1,t)
 
         # save audio
-        wav = wav.view(-1).numpy()
         sf.write(os.path.join(args.outdir, f"{utt_id}.wav"),
             wav, model.sampling_rate, "PCM_16")
 

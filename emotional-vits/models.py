@@ -27,29 +27,35 @@ class DurationPredictor(nn.Module):
         self.p_dropout = p_dropout
         self.gin_channels = gin_channels
         
-        self.cond = nn.Linear(gin_channels, 256)
-
         self.drop = nn.Dropout(p_dropout)
         self.pre = nn.Conv1d(in_channels, filter_channels, 1)
+        self.conv_1 = nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)
         self.norm_1 = modules.LayerNorm(filter_channels)
-        self.resblock = modules.ResBlock2(filter_channels, kernel_size, (1,3,5), gin_channels=256)
+        self.conv_2 = nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)
         self.norm_2 = modules.LayerNorm(filter_channels)
         self.proj = nn.Conv1d(filter_channels, 1, 1)
 
+        self.cond1 = nn.Linear(gin_channels, filter_channels)
+        self.cond2 = nn.Linear(gin_channels, filter_channels)
+
     def forward(self, x, x_mask, g):
         x, g = torch.detach(x), torch.detach(g)
-        g = self.cond(g)
-        x = self.norm_1(self.drop(self.pre(x)))
-        x = self.resblock(x, x_mask, g=g)
-        x = self.norm_2(self.drop(x))
+        x = self.pre(x) + self.cond1(g).unsqueeze(-1)
+        x = self.conv_1(x * x_mask)
+        x = self.drop(self.norm_1(F.relu(x)))
+        x = x + self.cond2(g).unsqueeze(-1)
+        x = self.conv_2(x * x_mask)
+        x = self.drop(self.norm_2(F.relu(x)))
         x = self.proj(x * x_mask)
         return x * x_mask
 
     def infer(self, x, g):
-        g = self.cond(g)
-        x = self.norm_1(self.pre(x))
-        x = self.resblock.infer(x, g=g)
-        x = self.norm_2(x)
+        x = self.pre(x) + self.cond1(g).unsqueeze(-1)
+        x = self.conv_1(x)
+        x = self.norm_1(F.relu(x))
+        x = x + self.cond2(g).unsqueeze(-1)
+        x = self.conv_2(x)
+        x = self.norm_2(F.relu(x))
         x = self.proj(x)
         return x
 
@@ -426,7 +432,7 @@ class SynthesizerTrn(nn.Module):
         self.dec = Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
         self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16, gin_channels=0)
         self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, 1, 4, gin_channels=gin_channels)
-        self.dp = DurationPredictor(hidden_channels, 256, 5, p_dropout=0.25, gin_channels=gin_channels)
+        self.dp = DurationPredictor(hidden_channels, 256, 5, p_dropout=0.5, gin_channels=gin_channels)
 
         assert n_speakers > 1
         self.emb_g = nn.Embedding(n_speakers, gin_channels)

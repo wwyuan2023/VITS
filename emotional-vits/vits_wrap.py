@@ -204,11 +204,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--device', type=str, required=False, default="cpu",
                         help='Use cuda or cpu. (default="cpu")')
+    parser.add_argument("--checkpoint", "--ckpt", default=None, type=str,
+                        help="checkpoint file to be loaded.")
     parser.add_argument('--utterance', '-u', type=str, required=False,
                         help='Input utterance with UTF-8 encoding to synthesize.')
     parser.add_argument('--textfile', '-t', type=str, required=False,
                         help='Input text file with UTF-8 encoding to synthesize.')
-    parser.add_argument('--spkid', '-s', type=int, required=False, default=1,
+    parser.add_argument('--spkid', '-i', type=int, required=False, default=1,
                         help='Set speaker ID. (default=1)')
     parser.add_argument('--volume', '-v', type=float, required=False, default=1.0,
                         help='Set volume, its range is (0.0, 1.0]. (default=1.0)')
@@ -225,14 +227,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # check args
-    if args.utterance is None or args.textfile is None:
+    if args.utterance is None and args.textfile is None:
         raise ValueError("Please specify either --utterance or --textfile")
     
     if not os.path.exists(args.outdir):
         os.makedirs(args.outdir)
         
     # construct tts instance
-    mytts = VITSWrap(device=args.device, loglv=args.loglv)
+    mytts = VITSWrap(args.checkpoint, device=args.device, loglv=args.loglv)
     
     # pack inputs
     inputs = {

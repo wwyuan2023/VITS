@@ -47,7 +47,7 @@ if __name__ == "__main__":
                         help='Input utterance with UTF-8 encoding to synthesize.')
     parser.add_argument('--textfile', '-t', type=str, required=False,
                         help='Input text file with UTF-8 encoding to synthesize.')
-    parser.add_argument('--spkid', '-s', type=int, required=False, default=1,
+    parser.add_argument('--spkid', '-i', type=int, required=False, default=1,
                         help='Set speaker ID. (default=1)')
     parser.add_argument('--volume', '-v', type=float, required=False, default=1.0,
                         help='Set volume, its range is (0.0, 1.0]. (default=1.0)')

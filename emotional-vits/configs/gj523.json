@@ -53,6 +53,8 @@
         "upsample_kernel_sizes": [16,12,4,4],
         "n_layers_q": 3,
         "use_spectral_norm": false,
+        "dilation_rate": [1,1,1,1],
+        "n_flows": 4,
         "gin_channels": 1024
     }
 }

@@ -33,12 +33,12 @@ class EmoVITS(object):
         self.noise_scale = hps.data['noise_scale']
 
         # setup speaker id mapping
-        self.spk_id_mapping = dict()
-        self.spk_id_mapping_mtime = dict()
+        self.spkid_mapping = dict()
+        self.spkid_mapping_mtime = dict()
         for map_path in utils.find_files(self.res_root_path, "*.map"):
             if self.loglv > 0:
                 sys.stdout.write(f"{func_name}: load speaker id mapping from {map_path}\n")
-            self._load_spk_id_mapping(map_path)
+            self._load_spkid_mapping(map_path)
 
         # setup emotion embedding
         self.spk_emo_embed = dict()
@@ -74,7 +74,7 @@ class EmoVITS(object):
         if self.loglv > 0:
             sys.stderr.write(f"{func_name}: Successful !\n")
     
-    def _load_spk_id_mapping(self, mapfn):
+    def _load_spkid_mapping(self, mapfn):
         if not os.path.exists(mapfn):
             return
         with open(mapfn, 'rt') as f:
@@ -85,8 +85,8 @@ class EmoVITS(object):
                 arr = line.split()
                 if len(arr) != 2 and not (arr[0].isdigit() and arr[1].isdigit()):
                     continue
-                self.spk_id_mapping[int(arr[0])] = int(arr[1])
-        self.spk_id_mapping_mtime[mapfn] = int(os.stat(mapfn).st_mtime)
+                self.spkid_mapping[int(arr[0])] = int(arr[1])
+        self.spkid_mapping_mtime[mapfn] = int(os.stat(mapfn).st_mtime)
 
     def _get_spk_emo_embed(self, emo: tuple):
         # emo: (spkid|ndarray, eid)
@@ -116,13 +116,13 @@ class EmoVITS(object):
         return None
 
     def update(self):
-        for map_path in self.spk_id_mapping_mtime.keys():
+        for map_path in self.spkid_mapping_mtime.keys():
             if not os.path.exists(map_path):
-                self.spk_id_mapping_mtime.pop(map_path)
+                self.spkid_mapping_mtime.pop(map_path)
                 continue
-            if int(os.stat(map_path).st_mtime) == self.spk_id_mapping_mtime[map_path]:
+            if int(os.stat(map_path).st_mtime) == self.spkid_mapping_mtime[map_path]:
                 continue
-            self._load_spk_id_mapping(map_path)
+            self._load_spkid_mapping(map_path)
         for emo_path in self.spk_emo_embed_mtime.keys():
             if not os.path.exists(emo_path):
                 self.spk_emo_embed_mtime.pop(emo_path)
@@ -141,7 +141,7 @@ class EmoVITS(object):
         x_length = text.shape[0]
         batch_size = 1
 
-        spkid = self.spk_id_mapping.get(spkid, spkid)
+        spkid = self.spkid_mapping.get(spkid, spkid)
         assert spkid < self.num_speaker, f"spkid={spkid} must be less than {self.num_speaker}"
         sid = torch.tensor([spkid], dtype=torch.long)
 
@@ -153,7 +153,7 @@ class EmoVITS(object):
             if emo is None:
                 emo = (spkid, -1)
             if isinstance(emo[0], int):
-                emo = tuple([self.spk_id_mapping.get(emo[0], emo[0]) if emo[0] != 0 else spkid, -1 if len(emo) == 1 else emo[1]])
+                emo = tuple([self.spkid_mapping.get(emo[0], emo[0]) if emo[0] != 0 else spkid, -1 if len(emo) == 1 else emo[1]])
             emo = self._get_spk_emo_embed(emo)
             emo = emo.unsqueeze(0)
 
@@ -197,9 +197,9 @@ def main():
                     "(See detail in VITS/emotional-vits/infer.py).")
     parser.add_argument("--scpfn", "--scp", type=str, required=True,
                         help="feats.scp file. ")
-    parser.add_argument("--spk-id", "--spk", default=None, type=int,
+    parser.add_argument("--spkid", "--sid", default=None, type=int,
                         help="speaker Id. (default=1)")
-    parser.add_argument("--emofn", "--emo", default=None, type=str,
+    parser.add_argument("--emotion", "--emo", default=None, type=str,
                         help="speaker Id or emotion file path. format: (spkid|path, eid), "
                              "which `path` is emotion embedding, `eid` is index. (default=1:0)")
     parser.add_argument("--outdir", type=str, required=True,
@@ -241,14 +241,14 @@ def main():
                 continue
             lines = line.split('|')
             utt_id = os.path.splitext(os.path.basename(lines[0]))[0]
-            if args.spk_id is not None:
-                spk_id = int(args.spk_id)
+            if args.spkid is not None:
+                spkid = int(args.spkid)
             elif len(lines) > 1:
-                spk_id = int(lines[-1])
+                spkid = int(lines[-1])
             else:
-                spk_id = 1
-            if args.emofn is not None:
-                emo = args.emofn.split(':')
+                spkid = 1
+            if args.emotion is not None:
+                emo = args.emotion.split(':')
             elif len(lines) > 2:
                 emo = lines[1].split(':')
             else:
@@ -263,7 +263,7 @@ def main():
                 else:
                     emo[1] = int(emo[1])
                 emo = tuple(emo)
-            features[utt_id] = (spk_id, emo, lines[0])
+            features[utt_id] = (spkid, emo, lines[0])
     logging.info(f"The number of features to be decoded = {len(features)}.")
 
     # start generation

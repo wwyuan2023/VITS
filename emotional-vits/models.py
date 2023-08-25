@@ -158,6 +158,7 @@ class ResidualCouplingBlock(nn.Module):
         gin_channels=0
     ):
         super().__init__()
+        assert len(dilation_rate) == n_flows
         self.channels = channels
         self.hidden_channels = hidden_channels
         self.kernel_size = kernel_size
@@ -167,8 +168,8 @@ class ResidualCouplingBlock(nn.Module):
         self.gin_channels = gin_channels
 
         self.flows = nn.ModuleList()
-        for _ in range(n_flows):
-            self.flows.append(modules.ResidualCouplingLayer(channels, hidden_channels, kernel_size, dilation_rate, n_layers, gin_channels=gin_channels, mean_only=True))
+        for i in range(n_flows):
+            self.flows.append(modules.ResidualCouplingLayer(channels, hidden_channels, kernel_size, dilation_rate[i], n_layers, gin_channels=gin_channels, mean_only=True))
             self.flows.append(modules.Flip())
         
         self.flows_reversed = list(self.flows)[::-1]
@@ -400,6 +401,8 @@ class SynthesizerTrn(nn.Module):
         upsample_rates, 
         upsample_initial_channel, 
         upsample_kernel_sizes,
+        dilation_rate=[1,1,1,1],
+        n_flows=4,
         n_speakers=0,
         gin_channels=0,
         align_noise=0.01,
@@ -407,6 +410,7 @@ class SynthesizerTrn(nn.Module):
         **kwargs):
 
         super().__init__()
+        assert len(dilation_rate) == n_flows
         self.text_channels = text_channels
         self.spec_channels = spec_channels
         self.inter_channels = inter_channels
@@ -423,6 +427,8 @@ class SynthesizerTrn(nn.Module):
         self.upsample_initial_channel = upsample_initial_channel
         self.upsample_kernel_sizes = upsample_kernel_sizes
         self.segment_size = segment_size
+        self.dilation_rate=dilation_rate
+        self.n_flows=n_flows
         self.n_speakers = n_speakers
         self.gin_channels = gin_channels
         self.align_noise = align_noise
@@ -431,7 +437,7 @@ class SynthesizerTrn(nn.Module):
         self.enc_p = TextEncoder(text_channels, inter_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout, gin_channels=gin_channels)
         self.dec = Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
         self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16, gin_channels=0)
-        self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, 1, 4, gin_channels=gin_channels)
+        self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, dilation_rate=dilation_rate, n_layers=4, n_flows=n_flows, gin_channels=gin_channels)
         self.dp = DurationPredictor(hidden_channels, 256, 5, p_dropout=0.5, gin_channels=gin_channels)
 
         assert n_speakers > 1

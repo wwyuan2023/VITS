@@ -3,6 +3,7 @@ logs
 .*.swp
 __pycache__
 build
+test
 *.c
 configs
 filelists*
@@ -10,5 +11,6 @@ checkpoint*
 *.wav
 *.scp
 *.log
+*.pk
 web_api/test
 sat

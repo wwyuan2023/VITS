@@ -68,7 +68,7 @@ class VITSWrap(object):
         volume = max(0., min(1., volume))
         speed = max(0.5, min(2., speed))
         pitch = max(0.5, min(2., pitch))
-        sampling_rate = max(48000, min(8000, sampling_rate))
+        sampling_rate = min(48000, max(8000, sampling_rate))
 
         speed /= pitch
 
@@ -199,18 +199,21 @@ if __name__ == "__main__":
     
     import argparse
     
-    loglv = 1
+    loglv = 0
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--device', type=str, required=False, default="cpu",
-                        help='Use cuda or cpu. (default="cpu")')
-    parser.add_argument("--checkpoint", "--ckpt", default=None, type=str,
+    parser.add_argument('--device', type=str, required=False, default=None,
+                        help='Use cuda or cpu.')
+    parser.add_argument("--checkpoint", "-c", default=None, type=str,
                         help="checkpoint file to be loaded.")
+    parser.add_argument("--emotion", "-e", default=None, type=str,
+                        help="speaker Id or emotion file path. format: (spkid|path, eid), "
+                             "which `path` is emotion embedding, `eid` is index.")
     parser.add_argument('--utterance', '-u', type=str, required=False,
                         help='Input utterance with UTF-8 encoding to synthesize.')
     parser.add_argument('--textfile', '-t', type=str, required=False,
                         help='Input text file with UTF-8 encoding to synthesize.')
-    parser.add_argument('--spkid', '-i', type=int, required=False, default=1,
+    parser.add_argument('--spkid', '--sid', '-i', type=int, required=False, default=1,
                         help='Set speaker ID. (default=1)')
     parser.add_argument('--volume', '-v', type=float, required=False, default=1.0,
                         help='Set volume, its range is (0.0, 1.0]. (default=1.0)')
@@ -236,12 +239,26 @@ if __name__ == "__main__":
     # construct tts instance
     mytts = VITSWrap(args.checkpoint, device=args.device, loglv=args.loglv)
     
+    # set emotion
+    emotion = args.emotion.split(':') if args.emotion is not None else None
+    if emotion is not None:
+        if isinstance(emotion[0], str) and os.path.exists(emotion[0]):
+            emotion[0] = np.fromfile(emotion[0], dtype=np.float32).reshape(-1, 1024)
+        else:
+            emotion[0] = int(emotion[0])
+        if len(emotion) == 1:
+            emotion.append(-1)
+        else:
+            emotion[1] = int(emotion[1])
+        emotion = tuple(emotion)
+    
     # pack inputs
     inputs = {
         "spkid": args.spkid,
         "volume": args.volume,
         "speed": args.speed,
         "pitch": args.pitch,
+        "emotion": emotion,
     }
     
     utt_text = []

@@ -7,13 +7,13 @@
 ```
 pip install -r requirments.txt
 pip install monotonic-align
-
+pip install textparser-${lastest-version}.tar.gz
 ```
 
 ## 2. 数据准备
 ```
-# 参考数据目录data8k
-# data8k/
+# 参考数据目录dataset
+# dataset/
 # ├──wav/*.wav
 # ├──txt/*.lab
 # ├──spkid.txt
@@ -21,14 +21,14 @@ pip install monotonic-align
 # └──valid.scp
 
 # 生成文本vector
-outdir=data8k/vec
+outdir=dataset/vec
 mkdir $outdir
-cat data8k/txt/*.lab | text-parser 0 $outdir
+cat dataset/txt/*.lab | text-vectorization $outdir
 
 # 提取情感向量
-outdir=data8k/emo
+outdir=dataset/emo
 mkdir $outdir
-find data8k/wav -name "*.wav" > files.scp
+find dataset/wav -name "*.wav" > files.scp
 python3 toolkits/extract_emotion.py --scp files.scp --outdir $outdir
 rm -f files.scp
 # 注意：首次运行会自动下载模型到~/.cache/huggingface/
@@ -40,7 +40,7 @@ rm -f files.scp
 
 ## 3. 开始训练
 ```
-python train.py -c configs/s679.json -m ${your_model_name}
+python train.py -c configs/base.json -m ${your_model_name}
 ```
 
 ## 4. 导出模型

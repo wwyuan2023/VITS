@@ -58,10 +58,10 @@ async def startup_event():
 @app.get("/api/text2speech")
 async def text2speech(
     tex: str = Query(..., min_length=1, max_length=1024),
-    per : int = Query(678, ge=1),
-    vol : int = Query(15, ge=0, le=15),
-    spd: int = Query(5, ge=0, le=15),
-    pit: int = Query(5, ge=0, le=15),
+    per : int = Query(1, ge=1),
+    vol : int = Query(100, ge=0, le=100),
+    spd: int = Query(0, ge=-12, le=12),
+    pit: int = Query(0, ge=-12, le=12),
     emo: int = Query(0, ge=0)
 ):
     global TCP_SOCKET_CLIENT, REMOTE
@@ -71,9 +71,9 @@ async def text2speech(
     inputs = {
         "text": tex,
         "spkid": per,
-        "volume": vol/15.0,
-        "speed": 2**(-(spd-5)/12.0),
-        "pitch": 2**((pit-5)/12.0),
+        "volume": vol / 100.0,
+        "speed": 2 ** (-spd / 12.0),
+        "pitch": 2 ** (pit / 12.0),
         "emotion": emotion,
     }
     outputs, TCP_SOCKET_CLIENT = synthesize(inputs, REMOTE, TCP_SOCKET_CLIENT, True)
@@ -90,10 +90,10 @@ async def text2speech(
 
 class InputBody(BaseModel):
     tex: constr(min_length=1, max_length=100*1024)
-    per: conint(ge=0) = 678
-    vol: conint(ge=0, le=15) = 15
-    spd: conint(ge=0, le=15) = 5
-    pit: conint(ge=0, le=15) = 5
+    per: conint(ge=0) = 1
+    vol: conint(ge=0, le=100) = 100
+    spd: conint(ge=-12, le=12) = 0
+    pit: conint(ge=-12, le=12) = 0
     emo: Union[int, List[float]] = 0
 
 @app.post("/api/text2speech")
@@ -110,9 +110,9 @@ async def text2speech(inputbody: InputBody):
     inputs = {
         "text": inputbody.tex,
         "spkid": inputbody.per,
-        "volume": inputbody.vol/15.0,
-        "speed": 2**(-(inputbody.spd-5)/12.0),
-        "pitch": 2**((inputbody.pit-5)/12.0),
+        "volume": inputbody.vol / 100.0,
+        "speed": 2 ** (-inputbody.spd / 12.0),
+        "pitch": 2 ** (inputbody.pit / 12.0),
         "emotion": emotion,
     }
     outputs, TCP_SOCKET_CLIENT = synthesize(inputs, REMOTE, TCP_SOCKET_CLIENT, True)

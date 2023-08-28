@@ -25,15 +25,29 @@ with open(scpfn, 'rt') as f:
 emo = []
 for emofn in scplist:
 	emo.append(np.fromfile(emofn, dtype=np.float32))
-print("load from", scpfn, "len=", len(emo))
+print("load from", scpfn, "len =", len(emo))
+
+# input limited
+emo = np.array(emo)
+np.random.shuffle(emo)
+emo = emo[:5000]
+print("shuffle, len =", len(emo))
 
 # cluster
 center, _ = kmeans(emo, min(K, len(emo)))
-print(center.shape)
+print("center.shape =", center.shape)
 #cluster, _ = vq(emo, center)
 
+# nearest
+dist = np.expand_dims(emo, 0) - np.expand_dims(center, 1) # (K, L, 1024)
+dist = np.linalg.norm(dist, 2, -1) # (K, L)
+idx = dist.argmin(1) # (K,)
+print("nearest indices =", idx)
+nearest = emo[idx]
+
 # save k-means
-center.tofile(outfn)
+#center.tofile(outfn)
+nearest.tofile(outfn)
 print("save to", outfn)
 
 

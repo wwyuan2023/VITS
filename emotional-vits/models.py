@@ -243,7 +243,7 @@ class Generator(nn.Module):
             self.num_kernels = len(resblock_kernel_sizes)
             self.num_upsamples = len(upsample_rates)
             self.conv_pre = Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3)
-            resblock = modules.ResBlock1 if resblock == '1' else modules.ResBlock2
+            resblock = getattr(modules, 'ResBlock' + resblock)
 
             self.ups = nn.ModuleList()
             for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):

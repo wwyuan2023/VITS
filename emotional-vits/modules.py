@@ -274,6 +274,68 @@ class ResBlock2(nn.Module):
             x = xt + x
         return x
 
+
+class ResBlock3(nn.Module):
+    def __init__(self, channels, kernel_size=3, dilation=(1, 3, 5), gin_channels=0):
+        super().__init__()
+        inter_channels = (channels // 16) * 16
+        self.convs1 = nn.ModuleList([
+            weight_norm(nn.Conv1d(channels, inter_channels*2, kernel_size, 1, dilation=dilation[0],
+                                  padding=get_padding(kernel_size, dilation[0])), dim=1),
+            weight_norm(nn.Conv1d(channels, inter_channels*2, kernel_size, 1, dilation=dilation[1],
+                                  padding=get_padding(kernel_size, dilation[1])), dim=1),
+            weight_norm(nn.Conv1d(channels, inter_channels*2, kernel_size, 1, dilation=dilation[2],
+                                  padding=get_padding(kernel_size, dilation[2])), dim=1)
+        ])
+        self.convs1.apply(init_weights)
+
+        self.convs2 = nn.ModuleList([
+            weight_norm(nn.Conv1d(inter_channels, channels, kernel_size, 1, dilation=1,
+                                  padding=get_padding(kernel_size, 1))),
+            weight_norm(nn.Conv1d(inter_channels, channels, kernel_size, 1, dilation=1,
+                                  padding=get_padding(kernel_size, 1))),
+            weight_norm(nn.Conv1d(inter_channels, channels, kernel_size, 1, dilation=1,
+                                  padding=get_padding(kernel_size, 1)))
+        ])
+        self.convs2.apply(init_weights)
+
+        self.conds = nn.ModuleList([
+            weight_norm(nn.Linear(gin_channels, inter_channels*2)),
+            weight_norm(nn.Linear(gin_channels, inter_channels*2)),
+            weight_norm(nn.Linear(gin_channels, inter_channels*2)),
+        ])
+
+    def forward(self, x, x_mask=None, g=None):
+        for c1, c2, cs in zip(self.convs1, self.convs2, self.conds):
+            xt = F.leaky_relu(x, LRELU_SLOPE)
+            if x_mask is not None:
+                xt = xt * x_mask
+            xt = c1(xt)
+            gs = cs(g)
+            xa, xb = torch.chunk(xt, 2, dim=1)
+            sa, sb = torch.chunk(gs, 2, dim=1)
+            xt = torch.tanh(xa + sa.unsqueeze(-1)) * torch.sigmoid(xb + sb.unsqueeze(-1))
+            if x_mask is not None:
+                xt = xt * x_mask
+            xt = c2(xt)
+            x = xt + x
+        if x_mask is not None:
+            x = x * x_mask
+        return x
+    
+    def infer(self, x, g):
+        for c1, c2, cs in zip(self.convs1, self.convs2, self.conds):
+            xt = F.leaky_relu(x, LRELU_SLOPE)
+            xt = c1(xt)
+            gs = cs(g)
+            xa, xb = torch.chunk(xt, 2, dim=1)
+            sa, sb = torch.chunk(gs, 2, dim=1)
+            xt = torch.tanh(xa + sa.unsqueeze(-1)) * torch.sigmoid(xb + sb.unsqueeze(-1))
+            xt = c2(xt)
+            x = xt + x
+        return x
+
+
 class Log(nn.Module):
     def forward(self, x, x_mask, reverse=False, **kwargs):
         if not reverse:

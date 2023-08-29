@@ -202,7 +202,7 @@ if __name__ == "__main__":
     loglv = 0
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--device', type=str, required=False, default=None,
+    parser.add_argument('--device', "-d", type=str, required=False, default=None,
                         help='Use cuda or cpu.')
     parser.add_argument("--checkpoint", "-c", default=None, type=str,
                         help="checkpoint file to be loaded.")
@@ -225,7 +225,7 @@ if __name__ == "__main__":
                         help='Set sampling rate.')
     parser.add_argument('--outdir', '-o', type=str, required=True,
                         help='Directory for saving synthetic wav.')
-    parser.add_argument('--loglv', '-d', type=int, required=False, default=loglv,
+    parser.add_argument('--loglv', '-l', type=int, required=False, default=loglv,
                         help='Log level. (default={})'.format(loglv))
     args = parser.parse_args()
     

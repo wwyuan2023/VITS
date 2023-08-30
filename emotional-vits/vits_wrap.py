@@ -225,6 +225,8 @@ if __name__ == "__main__":
                         help='Set sampling rate.')
     parser.add_argument('--outdir', '-o', type=str, required=True,
                         help='Directory for saving synthetic wav.')
+    parser.add_argument('--outfn', '-n', type=str, required=False,
+                        help='Filename for saving synthetic wav.')
     parser.add_argument('--loglv', '-l', type=int, required=False, default=loglv,
                         help='Log level. (default={})'.format(loglv))
     args = parser.parse_args()
@@ -272,13 +274,23 @@ if __name__ == "__main__":
                 utt_text.append(line)
     
     # syntheize
-    for idx, text in enumerate(utt_text, 1):
-        inputs["text"] = text
+    outfn = "" if args.outfn is None else args.outfn
+    if len(outfn) > 0 and outfn[-4:].lower() != ".wav":
+        for idx, text in enumerate(utt_text, 1):
+            inputs["text"] = text
+            print("To synthesize:\n", inputs)
+            outputs = mytts.speaking(inputs)    
+            wav = outputs.pop('wav')
+            print(outputs)
+            with open(os.path.join(args.outdir, f"{outfn}{idx:06d}.wav"), 'wb') as f:
+                f.write(wav)
+    else:
+        inputs["text"] = " ".join(utt_text)
         print("To synthesize:\n", inputs)
         outputs = mytts.speaking(inputs)    
         wav = outputs.pop('wav')
         print(outputs)
-        with open(os.path.join(args.outdir, f"{idx:06d}.wav"), 'wb') as f:
+        with open(os.path.join(args.outdir, outfn), 'wb') as f:
             f.write(wav)
     
     print("Done!")

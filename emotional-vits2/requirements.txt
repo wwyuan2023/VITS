@@ -1,0 +1,9 @@
+librosa
+numpy
+scipy
+soundfile
+torch==1.13
+tensorboard
+transformers==4.29.2
+Cython
+matplotlib

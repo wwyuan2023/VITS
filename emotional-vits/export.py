@@ -109,6 +109,8 @@ def main():
     logging.info(model)
     total_params, trainable_params, nontrainable_params = 0, 0, 0
     for name, param in model.named_parameters():
+        if 'enc_q.' in name or '.weight_g' in name:
+            continue
         num_params = np.prod(param.size())
         total_params += num_params
         if param.requires_grad:

@@ -98,7 +98,7 @@ def run(rank, n_gpus, hps):
     if rank == 0:
         logger.info(net_g)
         logger.info(net_d)
-        total_params_g = int(sum([np.prod(p.size()) if 'enc_q' not in n else 0 for n,p in net_g.named_parameters()]))
+        total_params_g = int(sum([np.prod(p.size()) if 'enc_q.' not in n and '.weight_g' not in n else 0 for n,p in net_g.named_parameters()]))
         total_params_d = int(sum([np.prod(p.size()) for p in net_d.parameters()]))
         logger.info(f"Total parameters of Generator: {total_params_g}")
         logger.info(f"Total parameters of Discriminator: {total_params_d}")

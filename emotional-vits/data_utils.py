@@ -32,9 +32,9 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         self.min_wav_len = max(self.segment_size, getattr(hparams.data, "min_wav_len", 0))
         self.max_wav_len = getattr(hparams.data, "max_wav_len", 10*self.sampling_rate)
 
+        self._filter()
         random.seed(1234)
         random.shuffle(self.filepaths_sid)
-        self._filter()
 
     def _filter(self):
         """

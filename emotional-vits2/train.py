@@ -189,6 +189,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
             with autocast(enabled=False):
                 loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
                 loss_dur_disc, losses_dur_disc_r, losses_dur_disc_g = discriminator_loss(d_d_hat_r, d_d_hat_g)
+                loss_dur_disc = loss_dur_disc * min(1, max(1e-9, (global_step * 1e-5 - 1)))
                 loss_disc_all = loss_disc + loss_dur_disc
         optim_d.zero_grad()
         scaler.scale(loss_disc_all).backward()
@@ -208,6 +209,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
                 loss_fm = feature_loss(fmap_r, fmap_g)
                 loss_gen, losses_gen = generator_loss(y_d_hat_g)
                 loss_dur_gen, losses_dur_gen = generator_loss(d_d_hat_g)
+                loss_dur_gen = loss_dur_gen * min(1, max(1e-9, (global_step * 1e-5 - 1)))
                 loss_gen_all = loss_gen + loss_fm + loss_mel + loss_dur + loss_kl + loss_kl_q + loss_dur_gen
         optim_g.zero_grad()
         scaler.scale(loss_gen_all).backward()

@@ -40,6 +40,7 @@ class DurationPredictor(nn.Module):
         
         self.cond1 = nn.Linear(gin_channels, filter_channels)
         self.cond2 = nn.Linear(gin_channels, filter_channels)
+        self.cond3 = nn.Linear(gin_channels, filter_channels)
         
     def forward(self, x, x_mask, x_lengths, g):
         x, g = torch.detach(x), torch.detach(g)
@@ -55,6 +56,7 @@ class DurationPredictor(nn.Module):
         x, _ = self.rnn(x)
         x, _ = pad_packed_sequence(x, batch_first=True, total_length=total_length)
         x = x.transpose(1, 2)
+        x = x + self.cond3(g).unsqueeze(-1)
         x = self.proj(x * x_mask)
         return x * x_mask
 
@@ -68,6 +70,7 @@ class DurationPredictor(nn.Module):
         x = x.transpose(1, 2)
         x, _ = self.rnn(x)
         x = x.transpose(1, 2)
+        x = x + self.cond3(g).unsqueeze(-1)
         x = self.proj(x)
         return x
 

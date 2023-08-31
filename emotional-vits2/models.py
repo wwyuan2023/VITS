@@ -19,7 +19,7 @@ from commons import init_weights, get_padding, gen_sin_table
 
 
 class DurationPredictor(nn.Module):
-    def __init__(self, in_channels, filter_channels, kernel_size=3, p_dropout=0, gin_channels=0):
+    def __init__(self, in_channels, filter_channels, kernel_size=3, p_dropout=0.25, gin_channels=0):
         super().__init__()
 
         self.in_channels = in_channels
@@ -28,22 +28,28 @@ class DurationPredictor(nn.Module):
         self.p_dropout = p_dropout
         self.gin_channels = gin_channels
         
-        self.norm_1 = modules.ConditionalLayerNorm(filter_channels, gin_channels)
-        self.norm_2 = modules.ConditionalLayerNorm(filter_channels, gin_channels)
+        self.drop = nn.Dropout(p_dropout)
+        self.norm_1 = modules.LayerNorm(filter_channels)
+        self.norm_2 = modules.LayerNorm(filter_channels)
 
-        self.pre = weight_norm(nn.Conv1d(in_channels, filter_channels, 3, padding=1))
+        self.pre = nn.Conv1d(in_channels, filter_channels, 1)
         self.conv_1 = nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)
         self.conv_2 = nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)
-        self.rnn = nn.GRU(filter_channels, filter_channels//2, num_layers=1, batch_first=True, bidirectional=True, dropout=p_dropout)
+        self.rnn = nn.GRU(filter_channels, filter_channels//2, num_layers=1, batch_first=True, bidirectional=True)
         self.proj = nn.Conv1d(filter_channels, 1, 7, padding=3)
+        
+        self.cond1 = nn.Linear(gin_channels, filter_channels)
+        self.cond2 = nn.Linear(gin_channels, filter_channels)
         
     def forward(self, x, x_mask, x_lengths, g):
         x, g = torch.detach(x), torch.detach(g)
-        total_length = x.size(2)
-        x = self.norm_1(F.selu(self.pre(x)), g)
-        x_ = x
-        x = F.relu(self.conv_1(x))
-        x = self.norm_2(x_ + self.conv_2(x), g)
+        total_length = x.size(2)        
+        x = self.pre(x) + self.cond1(g).unsqueeze(-1)
+        x = self.conv_1(x * x_mask)
+        x = self.drop(self.norm_1(F.relu(x)))
+        x = x + self.cond2(g).unsqueeze(-1)
+        x = self.conv_2(x * x_mask)
+        x = self.drop(self.norm_2(F.relu(x)))
         x = x.transpose(1, 2)
         x = pack_padded_sequence(x, lengths=x_lengths.cpu(), batch_first=True, enforce_sorted=False)
         x, _ = self.rnn(x)
@@ -53,10 +59,12 @@ class DurationPredictor(nn.Module):
         return x * x_mask
 
     def infer(self, x, g):
-        x = self.norm_1(F.selu(self.pre(x)), g)
-        x_ = x
-        x = F.relu(self.conv_1(x))
-        x = self.norm_2(x_ + self.conv_2(x), g)
+        x = self.pre(x) + self.cond1(g).unsqueeze(-1)
+        x = self.conv_1(x)
+        x = self.norm_1(F.relu(x))
+        x = x + self.cond2(g).unsqueeze(-1)
+        x = self.conv_2(x)
+        x = self.norm_2(F.relu(x))
         x = x.transpose(1, 2)
         x, _ = self.rnn(x)
         x = x.transpose(1, 2)

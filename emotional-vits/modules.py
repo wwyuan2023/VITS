@@ -281,11 +281,11 @@ class ResBlock3(nn.Module):
         inter_channels = (channels // 16) * 16
         self.convs1 = nn.ModuleList([
             weight_norm(nn.Conv1d(channels, inter_channels*2, kernel_size, 1, dilation=dilation[0],
-                                  padding=get_padding(kernel_size, dilation[0])), dim=1),
+                                  padding=get_padding(kernel_size, dilation[0]))),
             weight_norm(nn.Conv1d(channels, inter_channels*2, kernel_size, 1, dilation=dilation[1],
-                                  padding=get_padding(kernel_size, dilation[1])), dim=1),
+                                  padding=get_padding(kernel_size, dilation[1]))),
             weight_norm(nn.Conv1d(channels, inter_channels*2, kernel_size, 1, dilation=dilation[2],
-                                  padding=get_padding(kernel_size, dilation[2])), dim=1)
+                                  padding=get_padding(kernel_size, dilation[2])))
         ])
         self.convs1.apply(init_weights)
 

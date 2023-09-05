@@ -15,7 +15,7 @@ from torch.cuda.amp import autocast, GradScaler
 import commons
 import utils
 from data_utils import TextAudioSpeakerLoader, TextAudioSpeakerCollate, DistributedBucketSampler
-from models import SynthesizerTrn, MultiPeriodDiscriminator
+from models import SynthesizerTrn, AllDiscriminator
 from losses import generator_loss, discriminator_loss, feature_loss, kl_loss
 from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 
@@ -78,7 +78,11 @@ def run(rank, n_gpus, hps):
         align_noise_decay=hps.train.align_noise_decay,
         **hps.model
     ).cuda(rank)
-    net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda(rank)
+    net_d = AllDiscriminator(
+        hps.model.hidden_channels,
+        256, 5,
+        use_spectral_norm=hps.model.use_spectral_norm
+    ).cuda(rank)
     
     optim_g = torch.optim.AdamW(
         net_g.parameters(),
@@ -156,7 +160,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
 
         with autocast(enabled=hps.train.fp16_run):
             y_hat, l_length, attn, ids_slice, x_mask, z_mask,\
-            (z, z_p, m_p, logs_p, m_q, logs_q), z_q, y_hat_q = net_g(x, x_lengths, spec, spec_lengths, emo, speakers)
+            (z, z_p, m_p, logs_p, m_q, logs_q), z_q, y_hat_q, (x_hidden, logd_r, logd_g) = net_g(x, x_lengths, spec, spec_lengths, emo, speakers)
 
             mel = spec_to_mel_torch(
                 spec, 
@@ -181,10 +185,12 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
             y = commons.slice_segments(y, ids_slice * hps.data.hop_length, hps.train.segment_size) # slice 
 
             # Discriminator
-            y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
+            y_d_hat_r, y_d_hat_g, _, _, d_d_hat_r, d_d_hat_g = net_d(y, y_hat.detach(), x_hidden, x_mask, logd_r, logd_g.detach())
             with autocast(enabled=False):
                 loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
-                loss_disc_all = loss_disc
+                loss_dur_disc, losses_dur_disc_r, losses_dur_disc_g = discriminator_loss(d_d_hat_r, d_d_hat_g)
+                loss_dur_disc = loss_dur_disc * min(1, max(1e-9, (global_step * 1e-5 - 1)))
+                loss_disc_all = loss_disc + loss_dur_disc
         optim_d.zero_grad()
         scaler.scale(loss_disc_all).backward()
         scaler.unscale_(optim_d)
@@ -193,7 +199,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
 
         with autocast(enabled=hps.train.fp16_run):
             # Generator
-            y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
+            y_d_hat_r, y_d_hat_g, fmap_r, fmap_g, d_d_hat_r, d_d_hat_g = net_d(y, y_hat, x_hidden, x_mask, logd_r, logd_g)
             with autocast(enabled=False):
                 loss_dur = torch.sum(l_length.float()) * hps.train.c_dur
                 loss_mel = F.l1_loss(y_mel, y_hat_mel) * hps.train.c_mel
@@ -202,7 +208,9 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
                 loss_fwd = torch.mean((y_hat_q - y)**2) * hps.train.c_fwd
                 loss_fm = feature_loss(fmap_r, fmap_g)
                 loss_gen, losses_gen = generator_loss(y_d_hat_g)
-                loss_gen_all = loss_gen + loss_fm + loss_mel + loss_dur + loss_kl + loss_kl_q
+                loss_dur_gen, losses_dur_gen = generator_loss(d_d_hat_g)
+                loss_dur_gen = loss_dur_gen * min(1, max(1e-9, (global_step * 1e-5 - 1)))
+                loss_gen_all = loss_gen + loss_fm + loss_mel + loss_dur + loss_kl + loss_kl_q + loss_dur_gen
         optim_g.zero_grad()
         scaler.scale(loss_gen_all).backward()
         scaler.unscale_(optim_g)
@@ -213,7 +221,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
         if rank==0:
             if global_step % hps.train.log_interval == 0:
                 lr = optim_g.param_groups[0]['lr']
-                losses = [loss_disc, loss_gen, loss_fm, loss_mel, loss_dur, loss_kl, loss_kl_q, loss_fwd]
+                losses = [loss_disc, loss_gen, loss_fm, loss_mel, loss_dur, loss_kl, loss_kl_q, loss_fwd, loss_dur_gen]
                 logger.info('Train Epoch: {} [{:.0f}%]'.format(
                     epoch,
                     100. * batch_idx / len(train_loader)))
@@ -221,11 +229,14 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
                 
                 scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all, "learning_rate": lr, "grad_norm_d": grad_norm_d, "grad_norm_g": grad_norm_g}
                 scalar_dict.update({"loss/g/fm": loss_fm, "loss/g/mel": loss_mel, "loss/g/dur": loss_dur, "loss/g/kl": loss_kl})
-                scalar_dict.update({"loss/g/fwd": loss_fwd, "loss/g/kl_q": loss_kl_q})
+                scalar_dict.update({"loss/g/fwd": loss_fwd, "loss/g/kl_q": loss_kl_q, "loss/g/gen": loss_gen, "loss/g/dur_gen": loss_dur_gen})
 
                 scalar_dict.update({"loss/g/{}".format(i): v for i, v in enumerate(losses_gen)})
                 scalar_dict.update({"loss/d_r/{}".format(i): v for i, v in enumerate(losses_disc_r)})
                 scalar_dict.update({"loss/d_g/{}".format(i): v for i, v in enumerate(losses_disc_g)})
+                scalar_dict.update({"loss/dur/{}".format(i): v for i, v in enumerate(losses_dur_gen)})
+                scalar_dict.update({"loss/dur_r/{}".format(i): v for i, v in enumerate(losses_dur_disc_r)})
+                scalar_dict.update({"loss/dur_g/{}".format(i): v for i, v in enumerate(losses_dur_disc_g)})
                 image_dict = { 
                         "slice/mel_org": utils.plot_spectrogram_to_numpy(y_mel[0].data.cpu().numpy()),
                         "slice/mel_gen": utils.plot_spectrogram_to_numpy(y_hat_mel[0].data.cpu().numpy()), 

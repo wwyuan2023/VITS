@@ -4,7 +4,7 @@
         "eval_interval": 1000,
         "seed": 1234,
         "epochs": 10000,
-        "steps": 5000,
+        "steps": 3000,
         "learning_rate": 2e-4,
         "betas": [0.8, 0.99],
         "eps": 1e-9,
@@ -52,10 +52,10 @@
         "upsample_initial_channel": 512,
         "upsample_kernel_sizes": [16,12,4,4],
         "n_layers_q": 16,
-        "kernel_size_d": 5,
+        "kernel_size_d": 7,
         "use_spectral_norm": false,
-        "dilation_rate": [1,1,1,1],
-        "n_flows": 4,
+        "dilation_rate": [1,2,1,2,1],
+        "n_flows": 5,
         "gin_channels": 1024
     }
 }

@@ -59,11 +59,11 @@ def run(rank, n_gpus, hps):
         shuffle=True
     )
     collate_fn = TextAudioSpeakerCollate()
-    train_loader = DataLoader(train_dataset, num_workers=2 if hps.adapt else 8, shuffle=False, 
+    train_loader = DataLoader(train_dataset, num_workers=8, shuffle=False, 
         pin_memory=True, collate_fn=collate_fn, batch_sampler=train_sampler)
     if rank == 0:
         eval_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps)
-        eval_loader = DataLoader(eval_dataset, num_workers=2 if hps.adapt else 8, shuffle=False,
+        eval_loader = DataLoader(eval_dataset, num_workers=8, shuffle=False,
             batch_size=hps.train.batch_size, pin_memory=True,
             drop_last=False, collate_fn=collate_fn)
         logger.info(f"Load train files = {len(train_dataset)}")

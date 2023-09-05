@@ -59,11 +59,11 @@ def run(rank, n_gpus, hps):
         shuffle=True
     )
     collate_fn = TextAudioSpeakerCollate()
-    train_loader = DataLoader(train_dataset, num_workers=2 if hps.adapt else 8, shuffle=False, 
+    train_loader = DataLoader(train_dataset, num_workers=8, shuffle=False, 
         pin_memory=True, collate_fn=collate_fn, batch_sampler=train_sampler)
     if rank == 0:
         eval_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps)
-        eval_loader = DataLoader(eval_dataset, num_workers=2 if hps.adapt else 8, shuffle=False,
+        eval_loader = DataLoader(eval_dataset, num_workers=8, shuffle=False,
             batch_size=hps.train.batch_size, pin_memory=True,
             drop_last=False, collate_fn=collate_fn)
         logger.info(f"Load train files = {len(train_dataset)}")
@@ -80,8 +80,9 @@ def run(rank, n_gpus, hps):
     ).cuda(rank)
     net_d = AllDiscriminator(
         hps.model.hidden_channels,
-        256, 5,
-        use_spectral_norm=hps.model.use_spectral_norm
+        96, 5,
+        use_spectral_norm=hps.model.use_spectral_norm,
+        train_dd=hps.train.train_dd,
     ).cuda(rank)
     
     optim_g = torch.optim.AdamW(
@@ -188,8 +189,10 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
             y_d_hat_r, y_d_hat_g, _, _, d_d_hat_r, d_d_hat_g = net_d(y, y_hat.detach(), x_hidden, x_mask, logd_r, logd_g.detach())
             with autocast(enabled=False):
                 loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
-                loss_dur_disc, losses_dur_disc_r, losses_dur_disc_g = discriminator_loss(d_d_hat_r, d_d_hat_g)
-                loss_dur_disc = loss_dur_disc * min(1, max(1e-9, (global_step * 1e-5 - 1)))
+                if d_d_hat_r is not None and d_d_hat_g is not None:
+                    loss_dur_disc, losses_dur_disc_r, losses_dur_disc_g = discriminator_loss(d_d_hat_r, d_d_hat_g)
+                else:
+                    loss_dur_disc, losses_dur_disc_r, losses_dur_disc_g = 0, None, None
                 loss_disc_all = loss_disc + loss_dur_disc
         optim_d.zero_grad()
         scaler.scale(loss_disc_all).backward()
@@ -208,8 +211,10 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
                 loss_fwd = torch.mean((y_hat_q - y)**2) * hps.train.c_fwd
                 loss_fm = feature_loss(fmap_r, fmap_g)
                 loss_gen, losses_gen = generator_loss(y_d_hat_g)
-                loss_dur_gen, losses_dur_gen = generator_loss(d_d_hat_g)
-                loss_dur_gen = loss_dur_gen * min(1, max(1e-9, (global_step * 1e-5 - 1)))
+                if d_d_hat_r is not None and d_d_hat_g is not None:
+                    loss_dur_gen, losses_dur_gen = generator_loss(d_d_hat_g)
+                else:
+                    loss_dur_gen, losses_dur_gen = torch.tensor(0.0), None
                 loss_gen_all = loss_gen + loss_fm + loss_mel + loss_dur + loss_kl + loss_kl_q + loss_dur_gen
         optim_g.zero_grad()
         scaler.scale(loss_gen_all).backward()
@@ -234,9 +239,9 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
                 scalar_dict.update({"loss/g/{}".format(i): v for i, v in enumerate(losses_gen)})
                 scalar_dict.update({"loss/d_r/{}".format(i): v for i, v in enumerate(losses_disc_r)})
                 scalar_dict.update({"loss/d_g/{}".format(i): v for i, v in enumerate(losses_disc_g)})
-                scalar_dict.update({"loss/dur/{}".format(i): v for i, v in enumerate(losses_dur_gen)})
-                scalar_dict.update({"loss/dur_r/{}".format(i): v for i, v in enumerate(losses_dur_disc_r)})
-                scalar_dict.update({"loss/dur_g/{}".format(i): v for i, v in enumerate(losses_dur_disc_g)})
+                if losses_dur_gen is not None: scalar_dict.update({"loss/dur/{}".format(i): v for i, v in enumerate(losses_dur_gen)})
+                if losses_dur_disc_r is not None: scalar_dict.update({"loss/dur_r/{}".format(i): v for i, v in enumerate(losses_dur_disc_r)})
+                if losses_dur_disc_g is not None: scalar_dict.update({"loss/dur_g/{}".format(i): v for i, v in enumerate(losses_dur_disc_g)})
                 image_dict = { 
                         "slice/mel_org": utils.plot_spectrogram_to_numpy(y_mel[0].data.cpu().numpy()),
                         "slice/mel_gen": utils.plot_spectrogram_to_numpy(y_hat_mel[0].data.cpu().numpy()), 

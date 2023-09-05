@@ -19,7 +19,8 @@
         "c_kl_q": 0.01,
         "c_fwd": 10,
         "align_noise": 0.01,
-        "align_noise_decay": 1e-6
+        "align_noise_decay": 1e-6,
+        "train_dd": false
     },
     "data": {
         "training_files":"filelists/train.scp",
@@ -52,10 +53,10 @@
         "upsample_initial_channel": 512,
         "upsample_kernel_sizes": [16,12,4,4],
         "n_layers_q": 16,
-        "kernel_size_d": 7,
+        "kernel_size_d": 5,
         "use_spectral_norm": false,
-        "dilation_rate": [1,2,1,2,1],
-        "n_flows": 5,
+        "dilation_rate": [1,1,1,1],
+        "n_flows": 4,
         "gin_channels": 1024
     }
 }

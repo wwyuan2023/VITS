@@ -5,7 +5,6 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn import Conv1d, Conv2d, ConvTranspose1d
 from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 import commons
 import modules
@@ -29,7 +28,7 @@ class DurationPredictor(nn.Module):
         self.gin_channels = gin_channels
         
         self.drop = nn.Dropout(p_dropout)
-        self.pre = nn.Conv1d(in_channels, filter_channels, kernel_size, padding=kernel_size//2)
+        self.pre = nn.Conv1d(in_channels, filter_channels, 1)
         self.conv_1 = nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)
         self.norm_1 = modules.LayerNorm(filter_channels)
         self.conv_2 = nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)
@@ -39,24 +38,24 @@ class DurationPredictor(nn.Module):
         self.cond1 = nn.Linear(gin_channels, filter_channels)
         self.cond2 = nn.Linear(gin_channels, filter_channels)
 
-    def forward(self, x, x_mask, x_length, g):
+    def forward(self, x, x_mask, g):
         x, g = torch.detach(x), torch.detach(g)
         x = self.pre(x) + self.cond1(g).unsqueeze(-1)
         x = self.conv_1(x * x_mask)
-        x = self.drop(self.norm_1(F.relu(x)))
+        x = self.drop(self.norm_1(F.silu(x)))
         x = x + self.cond2(g).unsqueeze(-1)
         x = self.conv_2(x * x_mask)
-        x = self.drop(self.norm_2(F.relu(x)))
+        x = self.drop(self.norm_2(F.silu(x)))
         x = self.proj(x * x_mask)
         return x * x_mask
 
     def infer(self, x, g):
         x = self.pre(x) + self.cond1(g).unsqueeze(-1)
         x = self.conv_1(x)
-        x = self.norm_1(F.relu(x))
+        x = self.norm_1(F.silu(x))
         x = x + self.cond2(g).unsqueeze(-1)
         x = self.conv_2(x)
-        x = self.norm_2(F.relu(x))
+        x = self.norm_2(F.silu(x))
         x = self.proj(x)
         return x
 
@@ -370,61 +369,15 @@ class MultiPeriodDiscriminator(nn.Module):
         fmap_rs = []
         fmap_gs = []
         for i, d in enumerate(self.discriminators):
-            y_d_r, fmap_r = d(y)
-            y_d_g, fmap_g = d(y_hat)
-            y_d_rs.append(y_d_r)
-            y_d_gs.append(y_d_g)
-            fmap_rs.append(fmap_r)
-            fmap_gs.append(fmap_g)
+                y_d_r, fmap_r = d(y)
+                y_d_g, fmap_g = d(y_hat)
+                y_d_rs.append(y_d_r)
+                y_d_gs.append(y_d_g)
+                fmap_rs.append(fmap_r)
+                fmap_gs.append(fmap_g)
 
         return y_d_rs, y_d_gs, fmap_rs, fmap_gs
 
-
-class DurationDiscriminator(nn.Module):
-  def __init__(self, in_channels, filter_channels=256, kernel_size=5, use_spectral_norm=False):
-    super().__init__()
-
-    self.pre = weight_norm(nn.Conv1d(1, filter_channels, 1))
-    self.convs = nn.Sequential(
-        weight_norm(nn.Conv1d(2*filter_channels, filter_channels, kernel_size, padding=kernel_size//2)),
-        nn.LeakyReLU(0.2),
-        weight_norm(nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)),
-        nn.LeakyReLU(0.2),
-        weight_norm(nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)),
-        nn.LeakyReLU(0.2),
-        weight_norm(nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)),
-        nn.LeakyReLU(0.2),
-        nn.Conv1d(filter_channels, 1, 1)
-    )
-
-  def _forward(self, x, x_mask, d):
-    d = self.pre(d)
-    x = torch.cat([x, d], dim=1)
-    x = self.convs(x * x_mask)
-    return x * x_mask
-
-  def forward(self, x, x_mask, d, d_hat):
-    x = torch.detach(x)
-    d_d_r = self._forward(x, x_mask, d)
-    d_d_g = self._forward(x, x_mask, d_hat)
-    x_mask = x_mask.bool()
-    d_d_r = d_d_r.masked_select(x_mask)
-    d_d_g = d_d_g.masked_select(x_mask)
-    return [d_d_r], [d_d_g]
-
-
-class AllDiscriminator(nn.Module):
-    def __init__(self, in_channels, filter_channels=256, kernel_size=5, use_spectral_norm=False):
-        super().__init__()
-        self.mpd = MultiPeriodDiscriminator(use_spectral_norm)
-        self.dd = DurationDiscriminator(in_channels, filter_channels, kernel_size)
-    
-    def forward(self, y, y_hat, x, x_mask, d, d_hat):
-        y_d_rs, y_d_gs, fmap_rs, fmap_gs = self.mpd(y, y_hat)
-        d_d_rs, d_d_gs = self.dd(x, x_mask, d, d_hat)
-        
-        return y_d_rs, y_d_gs, fmap_rs, fmap_gs, d_d_rs, d_d_gs
-    
 
 class SynthesizerTrn(nn.Module):
     """
@@ -454,7 +407,7 @@ class SynthesizerTrn(nn.Module):
         gin_channels=0,
         kernel_size_q=5,
         n_layers_q=16,
-        kernel_size_d=7,
+        kernel_size_d=5,
         align_noise=0.01,
         align_noise_decay=1e-6,
         **kwargs):
@@ -527,7 +480,7 @@ class SynthesizerTrn(nn.Module):
 
         w = attn.sum(1, keepdim=True)
         logw_ = torch.log(w + 1e-6) * x_mask
-        logw = self.dp(x, x_mask, x_lengths, g=g)
+        logw = self.dp(x, x_mask, g=g)
         l_length = torch.sum(torch.abs(logw - logw_), [1, 2]) / torch.sum(x_mask) # for averaging
 
         # expand prior
@@ -542,13 +495,13 @@ class SynthesizerTrn(nn.Module):
         z_slice = commons.slice_segments(z_q, ids_slice, self.segment_size)
         o_q = self.dec(z_slice, g=g)
 
-        return o, l_length, attn, ids_slice, x_mask, y_mask, (z, z_p, m_p, logs_p, m_q, logs_q), z_q, o_q, (x, logw_.detach(), logw)
+        return o, l_length, attn, ids_slice, x_mask, y_mask, (z, z_p, m_p, logs_p, m_q, logs_q), z_q, o_q
 
     def inference(self, x, x_lengths, emo, sid=None, noise_scale=1, length_scale=1, max_len=None):
         g = self.emb_g(sid) # [b, h]
         x, m_p, logs_p, x_mask = self.enc_p(x, x_lengths, emo, g=g)
 
-        logw = self.dp(x, x_mask, x_lengths, g=g)
+        logw = self.dp(x, x_mask, g=g)
         w = torch.exp(logw) * x_mask * length_scale
         w_ceil = torch.ceil(w)
         y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()

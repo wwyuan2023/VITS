@@ -128,7 +128,7 @@ def run(rank, n_gpus, hps):
             train_and_evaluate(rank, epoch, hps, [net_g, net_d], [optim_g, optim_d], scaler, [train_loader, None], None, None)
         scheduler_g.step()
         scheduler_d.step()
-        if (hps.adapt and global_step > hps.train.steps) or optim_g.param_groups[0]['lr'] <= 1e-6:
+        if (hps.adapt and global_step > hps.train.steps) or optim_g.param_groups[0]['lr'] <= 5e-6:
             break
 
     utils.save_checkpoint(net_g, optim_g, epoch, os.path.join(hps.model_dir, "G_{}.pth".format(global_step)))

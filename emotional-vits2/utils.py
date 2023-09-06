@@ -22,7 +22,7 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, *, adapt=False):
   if 'iteration' in checkpoint_dict and not adapt:
     iteration = checkpoint_dict['iteration']
   else:
-    iteration = 1 
+    iteration = 1
   if 'optimizer' in checkpoint_dict and optimizer is not None and not adapt:
     optimizer.load_state_dict(checkpoint_dict['optimizer'])
   saved_state_dict = checkpoint_dict['model']

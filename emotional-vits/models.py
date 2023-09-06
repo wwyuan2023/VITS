@@ -401,6 +401,10 @@ class SynthesizerTrn(nn.Module):
         upsample_rates, 
         upsample_initial_channel, 
         upsample_kernel_sizes,
+        kernel_size_q=5,
+        n_layers_q=16,
+        hidden_size_d=256,
+        kernel_size_d=5,
         dilation_rate=[1,1,1,1],
         n_flows=4,
         n_speakers=0,
@@ -436,9 +440,9 @@ class SynthesizerTrn(nn.Module):
 
         self.enc_p = TextEncoder(text_channels, inter_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout, gin_channels=gin_channels)
         self.dec = Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
-        self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16, gin_channels=0)
+        self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, kernel_size_q, 1, n_layers_q, gin_channels=0)
         self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, dilation_rate=dilation_rate, n_layers=4, n_flows=n_flows, gin_channels=gin_channels)
-        self.dp = DurationPredictor(hidden_channels, 256, 5, p_dropout=0.5, gin_channels=gin_channels)
+        self.dp = DurationPredictor(hidden_channels, hidden_size_d, kernel_size_d, p_dropout=0.5, gin_channels=gin_channels)
 
         assert n_speakers > 1
         self.emb_g = nn.Embedding(n_speakers, gin_channels)

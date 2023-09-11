@@ -79,11 +79,11 @@ class VITSWrap(object):
 
         return inputs, utt_id, utt_text, spkid, volume, speed, pitch, sampling_rate, emotion
 
-    def _handle_outputs(self, inputs, wav_bytes, sampling_rate, segtext_str, time_used_frontend, time_used_backend, rtf):
+    def _handle_outputs(self, inputs, wav_bytes, sampling_rate, segment_info, time_used_frontend, time_used_backend, rtf):
         outputs = inputs
         outputs['wav'] = _genWavHeader(len(wav_bytes)//2, sampling_rate, 16) + wav_bytes
         outputs['sr'] = sampling_rate
-        outputs['segtext'] = segtext_str
+        outputs['segment_info'] = segment_info
         outputs['time_used_frontend'] = time_used_frontend * 1000  # ms
         outputs['time_used_backend'] = time_used_backend * 1000  # ms
         outputs['rtf'] = rtf
@@ -162,13 +162,12 @@ class VITSWrap(object):
             self._parse_input(inputs)
         
         batch_utt_id, batch_utt_text = self._split_utt_text(utt_id, utt_text)
-        batch_segtext, batch_wavlen = "", 0
-        batch_wav = []
+        batch_wav, batch_wavlen = [], 0
+        segment_info, start_ms, end_ms = [], 0, 0
         time_used_frontend, time_used_backend = 0, 0
         for idx, (utt_id, utt_text) in enumerate(zip(batch_utt_id, batch_utt_text), 1):
             start = time.time()
             utt_id, utt_segtext, utt_vector = self.textparser(utt_id, utt_text)
-            batch_segtext += utt_segtext.printer()
             end = time.time()
             time_used_frontend += end - start
 
@@ -183,6 +182,15 @@ class VITSWrap(object):
             batch_wav.append(wav)
             end = time.time()
             time_used_backend += end - start
+            
+            end_ms += len(wav) / sampling_rate * 1000
+            segment_info.append({
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "input_text": utt_text,
+                "segtext": utt_segtext.printer(),
+            })
+            start_ms = end_ms
         
         rtf = (time_used_frontend + time_used_backend) / (batch_wavlen / self.default_sampling_rate)
         batch_wav_bytes = bytes()
@@ -190,7 +198,7 @@ class VITSWrap(object):
             batch_wav_bytes += wav.tobytes()
 
         outputs = self._handle_outputs(
-            inputs, batch_wav_bytes, sampling_rate, batch_segtext, time_used_frontend, time_used_backend, rtf)
+            inputs, batch_wav_bytes, sampling_rate, segment_info, time_used_frontend, time_used_backend, rtf)
         return outputs
 
 

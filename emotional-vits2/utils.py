@@ -70,8 +70,11 @@ def summarize(writer, global_step, scalars={}, histograms={}, images={}, audios=
 
 def latest_checkpoint_path(dir_path, regex="G_*.pth"):
   f_list = glob.glob(os.path.join(dir_path, regex))
-  f_list.sort(key=lambda f: int("".join(filter(str.isdigit, f))))
-  x = f_list[-1]
+  if len(f_list) > 0:
+    f_list.sort(key=lambda f: int("".join(filter(str.isdigit, f))))
+    x = f_list[-1]
+  else:
+    x = None
   return x
 
 
@@ -154,6 +157,8 @@ def get_hparams(init=True):
                       help='Model name')
   parser.add_argument('-a', '--adapt', action='store_true',
                       help='Adaptative training or not, default=False.')
+  parser.add_argument('-d', '--use-dur-dis', action='store_true',
+                      help='Use duration discriminator or not, default=False.')
   parser.add_argument('--ckptG', type=str, required=False,
                       help='original VITS G checkpoint path')
   parser.add_argument('--ckptD', type=str, required=False,
@@ -179,6 +184,7 @@ def get_hparams(init=True):
   hparams = HParams(**config)
   hparams.model_dir = model_dir
   hparams.adapt = args.adapt
+  hparams.use_dur_dis = args.use_dur_dis
   hparams.ckptG = args.ckptG
   hparams.ckptD = args.ckptD
 

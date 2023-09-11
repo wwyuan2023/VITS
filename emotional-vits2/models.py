@@ -5,7 +5,6 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn import Conv1d, Conv2d, ConvTranspose1d
 from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 import commons
 import modules
@@ -59,6 +58,39 @@ class DurationPredictor(nn.Module):
         x = self.norm_2(F.relu(x))
         x = self.proj(x)
         return x
+
+
+class DurationDiscriminator(nn.Module):
+    def __init__(self, in_channels, filter_channels=128, kernel_size=5):
+        super().__init__()
+        self.pre_x = weight_norm(nn.Conv1d(in_channels, filter_channels, 1))
+        self.pre_d = weight_norm(nn.Conv1d(1, filter_channels, 1))
+        self.convs = nn.Sequential(
+            weight_norm(nn.Conv1d(2*filter_channels, filter_channels, kernel_size, padding=kernel_size//2)),
+            weight_norm(nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)),
+            weight_norm(nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)),
+            weight_norm(nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)),
+        )
+        self.out = nn.Conv1d(filter_channels, 1, 1)
+
+    def _forward(self, x, x_mask, d):
+        d = self.pre_d(d)
+        x = torch.cat([x, d], dim=1)
+        for f in self.convs:
+            x = f(x * x_mask)
+            x = F.leaky_relu(x, 0.1)
+        x = self.out(x * x_mask)
+        return x * x_mask
+
+    def forward(self, x, x_mask, d, d_hat):
+        x = torch.detach(x)
+        x = self.pre_x(x)
+        d_d_r = self._forward(x, x_mask, d)
+        d_d_g = self._forward(x, x_mask, d_hat)
+        x_mask = x_mask.bool()
+        d_d_r = d_d_r.masked_select(x_mask)
+        d_d_g = d_d_g.masked_select(x_mask)
+        return [d_d_r], [d_d_g]
 
 
 class TextEncoder(nn.Module):
@@ -370,64 +402,15 @@ class MultiPeriodDiscriminator(nn.Module):
         fmap_rs = []
         fmap_gs = []
         for i, d in enumerate(self.discriminators):
-            y_d_r, fmap_r = d(y)
-            y_d_g, fmap_g = d(y_hat)
-            y_d_rs.append(y_d_r)
-            y_d_gs.append(y_d_g)
-            fmap_rs.append(fmap_r)
-            fmap_gs.append(fmap_g)
+                y_d_r, fmap_r = d(y)
+                y_d_g, fmap_g = d(y_hat)
+                y_d_rs.append(y_d_r)
+                y_d_gs.append(y_d_g)
+                fmap_rs.append(fmap_r)
+                fmap_gs.append(fmap_g)
 
         return y_d_rs, y_d_gs, fmap_rs, fmap_gs
 
-
-class DurationDiscriminator(nn.Module):
-  def __init__(self, in_channels, filter_channels=256, kernel_size=5, use_spectral_norm=False):
-    super().__init__()
-
-    self.pre = weight_norm(nn.Conv1d(1, filter_channels, 1))
-    self.convs = nn.Sequential(
-        weight_norm(nn.Conv1d(2*filter_channels, filter_channels, kernel_size, padding=kernel_size//2)),
-        weight_norm(nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)),
-        weight_norm(nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)),
-        weight_norm(nn.Conv1d(filter_channels, filter_channels, kernel_size, padding=kernel_size//2)),
-    )
-    self.out = nn.Conv1d(filter_channels, 1, 1)
-
-  def _forward(self, x, x_mask, d):
-    d = self.pre(d)
-    x = torch.cat([x, d], dim=1)
-    for f in self.convs:
-        x = f(x * x_mask)
-        x = F.leaky_relu(x, 0.1)
-    x = self.out(x * x_mask)
-    return x * x_mask
-
-  def forward(self, x, x_mask, d, d_hat):
-    x = torch.detach(x)
-    d_d_r = self._forward(x, x_mask, d)
-    d_d_g = self._forward(x, x_mask, d_hat)
-    x_mask = x_mask.bool()
-    d_d_r = d_d_r.masked_select(x_mask)
-    d_d_g = d_d_g.masked_select(x_mask)
-    return [d_d_r], [d_d_g]
-
-
-class AllDiscriminator(nn.Module):
-    def __init__(self, in_channels, filter_channels=256, kernel_size=5, use_spectral_norm=False, train_dd=False):
-        super().__init__()
-        self.train_dd = train_dd
-        self.mpd = MultiPeriodDiscriminator(use_spectral_norm)
-        if self.train_dd:
-            self.dd = DurationDiscriminator(in_channels, filter_channels, kernel_size)
-    
-    def forward(self, y, y_hat, x, x_mask, d, d_hat):
-        y_d_rs, y_d_gs, fmap_rs, fmap_gs = self.mpd(y, y_hat)
-        if self.train_dd:
-            d_d_rs, d_d_gs = self.dd(x, x_mask, d, d_hat)
-        else:
-            d_d_rs, d_d_gs = None, None
-        return y_d_rs, y_d_gs, fmap_rs, fmap_gs, d_d_rs, d_d_gs
-    
 
 class SynthesizerTrn(nn.Module):
     """
@@ -455,9 +438,6 @@ class SynthesizerTrn(nn.Module):
         n_flows=4,
         n_speakers=0,
         gin_channels=0,
-        kernel_size_q=5,
-        n_layers_q=16,
-        kernel_size_d=7,
         align_noise=0.01,
         align_noise_decay=1e-6,
         **kwargs):
@@ -489,9 +469,9 @@ class SynthesizerTrn(nn.Module):
 
         self.enc_p = TextEncoder(text_channels, inter_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout, gin_channels=gin_channels)
         self.dec = Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
-        self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, kernel_size_q, 1, n_layers_q, gin_channels=0)
+        self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16, gin_channels=0)
         self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, dilation_rate=dilation_rate, n_layers=4, n_flows=n_flows, gin_channels=gin_channels)
-        self.dp = DurationPredictor(hidden_channels, 256, kernel_size_d, p_dropout=0.5, gin_channels=gin_channels)
+        self.dp = DurationPredictor(hidden_channels, 256, 5, p_dropout=0.5, gin_channels=gin_channels)
 
         assert n_speakers > 1
         self.emb_g = nn.Embedding(n_speakers, gin_channels)

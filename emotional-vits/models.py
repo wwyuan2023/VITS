@@ -18,7 +18,7 @@ from commons import init_weights, get_padding, gen_sin_table
 
 
 class DurationPredictor(nn.Module):
-    def __init__(self, in_channels, filter_channels, kernel_size=5, p_dropout=0.5, gin_channels=0):
+    def __init__(self, in_channels, filter_channels, kernel_size=5, p_dropout=0.25, act_func="ReLU", act_func_params={}, gin_channels=0):
         super().__init__()
 
         self.in_channels = in_channels
@@ -37,25 +37,32 @@ class DurationPredictor(nn.Module):
 
         self.cond1 = nn.Linear(gin_channels, filter_channels)
         self.cond2 = nn.Linear(gin_channels, filter_channels)
+        
+        if act_func.lower() == "swish":
+            self.act_1 = modules.Swish(**act_func_params)
+            self.act_2 = modules.Swish(**act_func_params)
+        else:
+            self.act_1 = getattr(nn, act_func)(**act_func_params)
+            self.act_2 = getattr(nn, act_func)(**act_func_params)
 
     def forward(self, x, x_mask, g):
         x, g = torch.detach(x), torch.detach(g)
         x = self.pre(x) + self.cond1(g).unsqueeze(-1)
         x = self.conv_1(x * x_mask)
-        x = self.drop(self.norm_1(F.relu(x)))
+        x = self.drop(self.norm_1(self.act_1(x)))
         x = x + self.cond2(g).unsqueeze(-1)
         x = self.conv_2(x * x_mask)
-        x = self.drop(self.norm_2(F.relu(x)))
+        x = self.drop(self.norm_2(self.act_2(x)))
         x = self.proj(x * x_mask)
         return x * x_mask
 
     def infer(self, x, g):
         x = self.pre(x) + self.cond1(g).unsqueeze(-1)
         x = self.conv_1(x)
-        x = self.norm_1(F.relu(x))
+        x = self.norm_1(self.act_1(x))
         x = x + self.cond2(g).unsqueeze(-1)
         x = self.conv_2(x)
-        x = self.norm_2(F.relu(x))
+        x = self.norm_2(self.act_2(x))
         x = self.proj(x)
         return x
 
@@ -70,6 +77,7 @@ class TextEncoder(nn.Module):
         n_layers,
         kernel_size,
         p_dropout,
+        ffn="FFN2",
         gin_channels=0
     ):
         super().__init__()
@@ -104,6 +112,7 @@ class TextEncoder(nn.Module):
             n_layers,
             kernel_size,
             p_dropout,
+            ffn=ffn,
             gin_channels=gin_channels,
         )
         self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
@@ -401,10 +410,14 @@ class SynthesizerTrn(nn.Module):
         upsample_rates, 
         upsample_initial_channel, 
         upsample_kernel_sizes,
+        ffn="FFN2",
         kernel_size_q=5,
         n_layers_q=16,
         hidden_size_d=256,
         kernel_size_d=5,
+        p_dropout_d=0.5,
+        act_func_d="ReLU",
+        act_func_params_d={},
         dilation_rate=[1,1,1,1],
         n_flows=4,
         n_speakers=0,
@@ -438,12 +451,12 @@ class SynthesizerTrn(nn.Module):
         self.align_noise = align_noise
         self.align_noise_decay = align_noise_decay
 
-        self.enc_p = TextEncoder(text_channels, inter_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout, gin_channels=gin_channels)
+        self.enc_p = TextEncoder(text_channels, inter_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout, ffn=ffn, gin_channels=gin_channels)
         self.dec = Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
         self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, kernel_size_q, 1, n_layers_q, gin_channels=0)
         self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, dilation_rate=dilation_rate, n_layers=4, n_flows=n_flows, gin_channels=gin_channels)
-        self.dp = DurationPredictor(hidden_channels, hidden_size_d, kernel_size_d, p_dropout=0.5, gin_channels=gin_channels)
-
+        self.dp = DurationPredictor(hidden_channels, hidden_size_d, kernel_size_d, p_dropout=p_dropout_d, act_func=act_func_d, act_func_params=act_func_params_d, gin_channels=gin_channels)
+        
         assert n_speakers > 1
         self.emb_g = nn.Embedding(n_speakers, gin_channels)
     

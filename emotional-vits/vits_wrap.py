@@ -233,7 +233,7 @@ if __name__ == "__main__":
                         help='Set sampling rate.')
     parser.add_argument('--outdir', '-o', type=str, required=True,
                         help='Directory for saving synthetic wav.')
-    parser.add_argument('--outfn', '-n', type=str, required=False,
+    parser.add_argument('--outfn', '-n', type=str, required=True,
                         help='Filename for saving synthetic wav.')
     parser.add_argument('--loglv', '-l', type=int, required=False, default=loglv,
                         help='Log level. (default={})'.format(loglv))

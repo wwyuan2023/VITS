@@ -11,6 +11,25 @@ from commons import init_weights, get_padding
 LRELU_SLOPE = 0.1
 
 
+class Swish(nn.Module):
+    
+    __constants__ = ['num_parameters']
+    num_parameters: int
+    
+    def __init__(self, num_parameters=1, init=1.0, device=None, dtype=None):
+        factory_kwargs = {'device': device, 'dtype': dtype}
+        self.num_parameters = num_parameters
+        super().__init__()
+        self.weight = nn.Parameter(
+            torch.empty(num_parameters, **factory_kwargs).fill_(init))
+    
+    def forward(self, x):
+        return x * torch.sigmoid(self.weight * x)
+    
+    def extra_repr(self) -> str:
+        return 'num_parameters={}'.format(self.num_parameters)
+
+
 class LayerNorm(nn.Module):
     def __init__(self, channels, eps=1e-5):
         super().__init__()

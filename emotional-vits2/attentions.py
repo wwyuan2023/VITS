@@ -10,7 +10,7 @@ from modules import LayerNorm
 
 
 class Encoder(nn.Module):
-    def __init__(self, hidden_channels, filter_channels, n_heads, n_layers, kernel_size=1, p_dropout=0., gin_channels=0, **kwargs):
+    def __init__(self, hidden_channels, filter_channels, n_heads, n_layers, kernel_size=1, p_dropout=0., ffn="FFN2", gin_channels=0, **kwargs):
         super().__init__()
         self.hidden_channels = hidden_channels
         self.filter_channels = filter_channels
@@ -28,7 +28,7 @@ class Encoder(nn.Module):
         for i in range(self.n_layers):
             self.attn_layers.append(MultiHeadAttention(hidden_channels, hidden_channels, n_heads, p_dropout=p_dropout))
             self.norm_layers_1.append(LayerNorm(hidden_channels))
-            self.ffn_layers.append(FFN2(hidden_channels, hidden_channels, filter_channels, kernel_size, p_dropout=p_dropout, gin_channels=gin_channels))
+            self.ffn_layers.append(globals()[ffn](hidden_channels, hidden_channels, filter_channels, kernel_size, p_dropout=p_dropout, gin_channels=gin_channels))
             self.norm_layers_2.append(LayerNorm(hidden_channels))
 
     def forward(self, x, x_mask, g):
@@ -101,7 +101,7 @@ class MultiHeadAttention(nn.Module):
 
 
 class FFN(nn.Module):
-    def __init__(self, in_channels, out_channels, filter_channels, kernel_size, p_dropout=0):
+    def __init__(self, in_channels, out_channels, filter_channels, kernel_size, p_dropout=0, gin_channels=0):
         super().__init__()
         assert kernel_size % 2 == 1, f"{kernel_size}"
         self.in_channels = in_channels
@@ -114,13 +114,13 @@ class FFN(nn.Module):
         self.conv_2 = nn.Conv1d(filter_channels, out_channels, kernel_size, padding=kernel_size//2)
         self.drop = nn.Dropout(p_dropout)
 
-    def forward(self, x, x_mask):
+    def forward(self, x, x_mask, g=None):
         x = F.relu(self.conv_1(x))
         x = self.drop(x)
-        x = self.conv_2(x)
+        x = self.conv_2(x * x_mask)
         return x * x_mask
     
-    def infer(self, x):
+    def infer(self, x, g=None):
         x = F.relu(self.conv_1(x))
         x = self.conv_2(x)
         return x
@@ -153,7 +153,7 @@ class FFN2(nn.Module):
         xa, xb = torch.chunk(x, 2, dim=1)
         sa, sb = torch.chunk(g, 2, dim=1)
         x = torch.tanh(xa + sa.unsqueeze(-1)) * torch.sigmoid(xb + sb.unsqueeze(-1))
-        x = self.conv_2(x)
+        x = self.conv_2(x * x_mask)
         return x * x_mask
     
     def infer(self, x, g):
@@ -165,3 +165,35 @@ class FFN2(nn.Module):
         x = self.conv_2(x)
         return x
 
+class FFN3(nn.Module):
+    def __init__(self, in_channels, out_channels, filter_channels, kernel_size, p_dropout=0, gin_channels=0):
+        super().__init__()
+        assert kernel_size % 2 == 1, f"{kernel_size}"
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.filter_channels = filter_channels
+        self.kernel_size = kernel_size
+        self.p_dropout = p_dropout
+
+        self.conv_1 = nn.Conv1d(in_channels, filter_channels, kernel_size, padding=kernel_size//2)
+        self.conv_2 = nn.Conv1d(filter_channels, out_channels, kernel_size, padding=kernel_size//2)
+        self.drop = nn.Dropout(p_dropout)
+        
+        self.cond = nn.Linear(gin_channels, filter_channels)
+        
+        nn.init.xavier_uniform_(self.conv_1.weight)
+        nn.init.xavier_uniform_(self.conv_2.weight)
+        nn.init.xavier_uniform_(self.cond.weight)
+
+    def forward(self, x, x_mask, g):
+        x = F.relu(self.conv_1(x))
+        x = self.drop(x)
+        g = self.cond(g)
+        x = self.conv_2((x + g) * x_mask)
+        return x * x_mask
+    
+    def infer(self, x, g):
+        x = F.relu(self.conv_1(x))
+        g = self.cond(g)
+        x = self.conv_2(x + g)
+        return x

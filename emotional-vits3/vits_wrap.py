@@ -10,6 +10,7 @@ from librosa import resample
 
 from textparser import TextParser
 from infer import EmoVITS
+from version import __version__
 
 
 def _genWavHeader(sampleNum, sampleRate=8000, bitNum=16):
@@ -49,7 +50,7 @@ class VITSWrap(object):
 
         if self.loglv > 0:
             func_name = f"{self.__class__.__name__}::{sys._getframe().f_code.co_name}"
-            sys.stderr.write(f"{func_name}: Successful !\n")
+            sys.stderr.write(f"{func_name}: init Successful, version={__version__} !\n")
     
     def update(self):
         self.textparser.update()

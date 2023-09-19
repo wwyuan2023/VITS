@@ -279,14 +279,13 @@ class PosteriorEncoder(nn.Module):
         return z
 
 
-class Generator(nn.Module):
+class Generator1(nn.Module):
     def __init__(self, initial_channel, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=0):
-        super(Generator, self).__init__()
+        super().__init__()
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
+        
         self.conv_pre = Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3)
-        resblock = getattr(modules, 'ResBlock' + resblock)
-
         self.ups = nn.ModuleList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
             self.ups.append(weight_norm(
@@ -297,7 +296,7 @@ class Generator(nn.Module):
         for i in range(len(self.ups)):
             ch = upsample_initial_channel//(2**(i+1))
             for _, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
-                self.resblocks.append(resblock(ch, k, d, gin_channels))
+                self.resblocks.append(getattr(modules, f'ResBlock{resblock}')(ch, k, d, gin_channels))
 
         self.conv_post = Conv1d(ch, 1, 7, 1, padding=3, bias=False)
         self.ups.apply(init_weights)
@@ -317,6 +316,74 @@ class Generator(nn.Module):
         x = self.conv_post(x)
         x = torch.tanh(x)
         return x
+
+
+class Generator2(nn.Module):
+    def __init__(self, initial_channel, fft_size, hop_size, win_size, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_channels, upsample_kernel_sizes, gin_channels=0):
+        super().__init__()
+        assert len(upsample_channels) == len(upsample_kernel_sizes) and all([k % 2 == 1 for k in upsample_kernel_sizes])
+        assert len(upsample_channels) == len(resblock_kernel_sizes) == len(resblock_dilation_sizes)
+        self.num_upsamples = len(upsample_channels)
+        upsample_channels.append(initial_channel)
+        
+        self.STFT = modules.TorchSTFT(fft_size, hop_size, win_size)
+        self.conv_pre = Conv1d(initial_channel, initial_channel, 7, 1, padding=3)
+        self.ups = nn.ModuleList()
+        for i, k in enumerate(upsample_kernel_sizes):
+            self.ups.append(weight_norm(Conv1d(upsample_channels[i-1], upsample_channels[i], k, padding=k//2)))
+
+        self.resblocks = nn.ModuleList()
+        for i, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
+            ch = upsample_channels[i]
+            self.resblocks.append(getattr(modules, f'ResBlock{resblock}')(ch, k, d, gin_channels))
+
+        self.conv_post = nn.Sequential(
+            nn.PReLU(init=0.142),
+            Conv1d(ch, fft_size+2, 1),
+        )
+        self.ups.apply(init_weights)
+        
+        self.infer = self.forward
+
+    def forward(self, x, g):
+        x = self.conv_pre(x)
+        for i in range(self.num_upsamples):
+            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            x = self.ups[i](x)
+            x = self.resblocks[i](x, g=g)
+        x = self.conv_post(x)
+        real, imag = torch.chunk(x, 2, dim=1)
+        return self.STFT.istft(real, imag).unsqueeze(1)
+
+
+class Generator3(nn.Module):
+    def __init__(self, initial_channel, fft_size, hop_size, win_size, resblock, dim, intermediate_dim=2048, kernel_size=7, num_blocks=8, gin_channels=0):
+        super().__init__()
+        self.STFT = modules.TorchSTFT(fft_size, hop_size, win_size)
+        self.conv_pre = Conv1d(initial_channel, dim, 7, 1, padding=3)
+        self.resblocks = nn.ModuleList(
+            getattr(modules, f"ConvNeXtBlock{resblock}")(
+                dim, intermediate_dim, kernel_size, gin_channels
+            ) for _ in range(num_blocks)
+        )
+
+        self.conv_post = nn.Sequential(
+            nn.PReLU(init=0.142),
+            Conv1d(dim, fft_size+2, 1),
+        )
+        self.resblocks.apply(init_weights)
+        
+        self.infer = self.forward
+
+    def forward(self, x, g):
+        x = self.conv_pre(x)
+        for i in range(self.num_upsamples):
+            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            x = self.ups[i](x)
+            x = self.resblocks[i](x, g=g)
+        x = self.conv_post(x)
+        real, imag = torch.chunk(x, 2, dim=1)
+        return self.STFT.istft(real, imag).unsqueeze(1)
 
 
 class DiscriminatorP(nn.Module):
@@ -425,12 +492,21 @@ class SynthesizerTrn(nn.Module):
         n_layers,
         kernel_size,
         p_dropout,
-        resblock, 
-        resblock_kernel_sizes, 
-        resblock_dilation_sizes, 
-        upsample_rates, 
-        upsample_initial_channel, 
-        upsample_kernel_sizes,
+        resblock_kernel_sizes=None, 
+        resblock_dilation_sizes=None,
+        upsample_rates=None,
+        upsample_initial_channel=None,
+        upsample_kernel_sizes=None,
+        upsample_channels=None,
+        dim_g=None,
+        intermediate_dim=None,
+        kernel_size_g=None,
+        num_blocks_g=None,
+        fft_size=None,
+        hop_size=None,
+        win_size=None,
+        generator="1",
+        resblock="2", 
         ffn="FFN2",
         kernel_size_q=5,
         n_layers_q=16,
@@ -446,22 +522,30 @@ class SynthesizerTrn(nn.Module):
         align_noise=0.01,
         align_noise_decay=1e-6,
         align_noise_min=0,
-        **kwargs):
+        **kwargs
+    ):
 
         super().__init__()
         assert len(dilation_rate) == n_flows
+        assert n_speakers > 1
         self.segment_size = segment_size
         self.align_noise = align_noise
         self.align_noise_decay = align_noise_decay
         self.align_noise_min = align_noise_min
-
+        
+        if generator == "1":
+            self.dec = Generator1(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
+        elif generator == "2":
+            self.dec = Generator2(inter_channels, fft_size, hop_size, win_size, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_channels, upsample_kernel_sizes, gin_channels=gin_channels)
+        elif generator == "3":
+            self.dec = Generator3(inter_channels, fft_size, hop_size, win_size, resblock, dim_g, intermediate_dim, kernel_size_g, num_blocks_g, gin_channels=gin_channels)
+        else:
+            raise ValueError(f"Unkown generator={generator}\n")
         self.enc_p = TextEncoder(text_channels, inter_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout, ffn=ffn, gin_channels=gin_channels)
-        self.dec = Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
         self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, kernel_size_q, 1, n_layers_q, gin_channels=0)
         self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, dilation_rate=dilation_rate, n_layers=4, n_flows=n_flows, gin_channels=gin_channels)
         self.dp = DurationPredictor(hidden_channels, hidden_size_d, kernel_size_d, p_dropout=p_dropout_d, act_func=act_func_d, act_func_params=act_func_params_d, gin_channels=gin_channels)
         
-        assert n_speakers > 1
         self.emb_g = nn.Embedding(n_speakers, gin_channels)
     
     def remove_weight_norm(self):
@@ -506,7 +590,7 @@ class SynthesizerTrn(nn.Module):
         m_p = torch.matmul(attn, m_p.transpose(1, 2)).transpose(1, 2)
         logs_p = torch.matmul(attn, logs_p.transpose(1, 2)).transpose(1, 2)
 
-        z_slice, ids_slice = commons.rand_slice_segments(z, y_lengths, self.segment_size)
+        z_slice, ids_slice = commons.rand_slice_segments(z, y_lengths, self.segment_size+1)
         o = self.dec(z_slice, g=g)
 
         # forward generate
@@ -552,7 +636,7 @@ class SynthesizerTrn(nn.Module):
 
         z_p = m_p + torch.randn_like(m_p) * torch.exp(logs_p) * noise_scale
         z = self.flow.infer(z_p, g=g, reverse=True)
-        o = self.dec.infer(z, g=g)
+        o = self.dec(z, g=g)
         return o
     
     @torch.no_grad()
@@ -571,7 +655,7 @@ class SynthesizerTrn(nn.Module):
         s_p = torch.matmul(attn, s_p.transpose(1, 2)).transpose(1, 2)
         z_p = m_p + noise * s_p
         z = self.flow.infer(z_p, g=g, reverse=True)
-        o = self.dec.infer(z, g=g)
+        o = self.dec(z, g=g)
         return o
 
 

@@ -249,8 +249,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
                 logger.info([f"{x.item():.05f}" for x in losses] + [f"{global_step}", f"{lr:.06f}"])
                 
                 scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all, "learning_rate": lr, "grad_norm_d": grad_norm_d, "grad_norm_g": grad_norm_g}
-                scalar_dict.update({"loss/g/fm": loss_fm, "loss/g/mel": loss_mel, "loss/g/dur": loss_dur, "loss/g/kl": loss_kl})
-                scalar_dict.update({"loss/g/kl_q": loss_kl_q})
+                scalar_dict.update({"loss/g/fm": loss_fm, "loss/g/mel": loss_mel, "loss/g/dur": loss_dur, "loss/g/kl": loss_kl, "loss/g/kl_q": loss_kl_q})
                 if use_dur_dis:
                     scalar_dict.update({"loss/p/total": loss_disc_p, "grad_norm_p": grad_norm_p})
                     scalar_dict.update({"loss/p/{}".format(i): v for i, v in enumerate(losses_gen_p)})

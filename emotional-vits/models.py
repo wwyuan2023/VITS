@@ -247,92 +247,80 @@ class PosteriorEncoder(nn.Module):
 
 
 class Generator(nn.Module):
-        def __init__(self, initial_channel, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=0):
-            super(Generator, self).__init__()
-            self.num_kernels = len(resblock_kernel_sizes)
-            self.num_upsamples = len(upsample_rates)
-            self.conv_pre = Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3)
-            resblock = getattr(modules, 'ResBlock' + resblock)
+    def __init__(self, initial_channel, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=0):
+        super(Generator, self).__init__()
+        self.num_kernels = len(resblock_kernel_sizes)
+        self.num_upsamples = len(upsample_rates)
+        self.conv_pre = Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3)
+        resblock = getattr(modules, 'ResBlock' + resblock)
 
-            self.ups = nn.ModuleList()
-            for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
-                self.ups.append(weight_norm(
-                    ConvTranspose1d(upsample_initial_channel//(2**i), upsample_initial_channel//(2**(i+1)),
-                                    k, u, padding=(k-u)//2)))
+        self.ups = nn.ModuleList()
+        for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
+            self.ups.append(weight_norm(
+                ConvTranspose1d(upsample_initial_channel//(2**i), upsample_initial_channel//(2**(i+1)),
+                                k, u, padding=(k-u)//2)))
 
-            self.resblocks = nn.ModuleList()
-            for i in range(len(self.ups)):
-                ch = upsample_initial_channel//(2**(i+1))
-                for _, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
-                    self.resblocks.append(resblock(ch, k, d, gin_channels))
+        self.resblocks = nn.ModuleList()
+        for i in range(len(self.ups)):
+            ch = upsample_initial_channel//(2**(i+1))
+            for _, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
+                self.resblocks.append(resblock(ch, k, d, gin_channels))
 
-            self.conv_post = Conv1d(ch, 1, 7, 1, padding=3, bias=False)
-            self.ups.apply(init_weights)
-
-        def forward(self, x, g):
-            x = self.conv_pre(x)
-            for i in range(self.num_upsamples):
-                x = F.leaky_relu(x, modules.LRELU_SLOPE)
-                x = self.ups[i](x)
-                xs = 0
-                for j in range(self.num_kernels):
-                    xs += self.resblocks[i*self.num_kernels+j](x, g=g)
-                x = xs / self.num_kernels
-            x = F.leaky_relu(x)
-            x = self.conv_post(x)
-            x = torch.tanh(x)
-            return x
+        self.conv_post = Conv1d(ch, 1, 7, 1, padding=3, bias=False)
+        self.ups.apply(init_weights)
         
-        def infer(self, x, g):
-            x = self.conv_pre(x)
-            for i in range(self.num_upsamples):
-                x = F.leaky_relu(x, modules.LRELU_SLOPE)
-                x = self.ups[i](x)
-                xs = 0
-                for j in range(self.num_kernels):
-                    xs += self.resblocks[i*self.num_kernels+j].infer(x, g=g)
-                x = xs / self.num_kernels
-            x = F.leaky_relu(x)
-            x = self.conv_post(x)
-            x = torch.tanh(x)
-            return x
+        self.infer = self.forward
+
+    def forward(self, x, g):
+        x = self.conv_pre(x)
+        for i in range(self.num_upsamples):
+            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            x = self.ups[i](x)
+            xs = 0
+            for j in range(self.num_kernels):
+                xs += self.resblocks[i*self.num_kernels+j](x, g=g)
+            x = xs / self.num_kernels
+        x = F.leaky_relu(x)
+        x = self.conv_post(x)
+        x = torch.tanh(x)
+        return x
 
 
 class DiscriminatorP(nn.Module):
-        def __init__(self, period, kernel_size=5, stride=3, use_spectral_norm=False):
-            super(DiscriminatorP, self).__init__()
-            self.period = period
-            self.use_spectral_norm = use_spectral_norm
-            norm_f = weight_norm if use_spectral_norm == False else spectral_norm
-            self.convs = nn.ModuleList([
-                norm_f(Conv2d(1, 32, (kernel_size, 1), (stride, 1), padding=(get_padding(kernel_size, 1), 0))),
-                norm_f(Conv2d(32, 128, (kernel_size, 1), (stride, 1), padding=(get_padding(kernel_size, 1), 0))),
-                norm_f(Conv2d(128, 512, (kernel_size, 1), (stride, 1), padding=(get_padding(kernel_size, 1), 0))),
-                norm_f(Conv2d(512, 1024, (kernel_size, 1), (stride, 1), padding=(get_padding(kernel_size, 1), 0))),
-                norm_f(Conv2d(1024, 1024, (kernel_size, 1), 1, padding=(get_padding(kernel_size, 1), 0))),
-            ])
-            self.conv_post = norm_f(Conv2d(1024, 1, (3, 1), 1, padding=(1, 0)))
+    def __init__(self, period, kernel_size=5, stride=3, use_spectral_norm=False):
+        super(DiscriminatorP, self).__init__()
+        self.period = period
+        self.use_spectral_norm = use_spectral_norm
+        norm_f = weight_norm if use_spectral_norm == False else spectral_norm
+        self.convs = nn.ModuleList([
+            norm_f(Conv2d(1, 32, (kernel_size, 1), (stride, 1), padding=(get_padding(kernel_size, 1), 0))),
+            norm_f(Conv2d(32, 128, (kernel_size, 1), (stride, 1), padding=(get_padding(kernel_size, 1), 0))),
+            norm_f(Conv2d(128, 512, (kernel_size, 1), (stride, 1), padding=(get_padding(kernel_size, 1), 0))),
+            norm_f(Conv2d(512, 1024, (kernel_size, 1), (stride, 1), padding=(get_padding(kernel_size, 1), 0))),
+            norm_f(Conv2d(1024, 1024, (kernel_size, 1), 1, padding=(get_padding(kernel_size, 1), 0))),
+        ])
+        self.conv_post = norm_f(Conv2d(1024, 1, (3, 1), 1, padding=(1, 0)))
 
-        def forward(self, x):
-            fmap = []
+    def forward(self, x):
+        fmap = []
 
-            # 1d to 2d
-            b, c, t = x.shape
-            if t % self.period != 0: # pad first
-                    n_pad = self.period - (t % self.period)
-                    x = F.pad(x, (0, n_pad), "reflect")
-                    t = t + n_pad
-            x = x.view(b, c, t // self.period, self.period)
+        # 1d to 2d
+        b, c, t = x.shape
+        if t % self.period != 0: # pad first
+                n_pad = self.period - (t % self.period)
+                x = F.pad(x, (0, n_pad), "reflect")
+                t = t + n_pad
+        x = x.view(b, c, t // self.period, self.period)
 
-            for l in self.convs:
-                    x = l(x)
-                    x = F.leaky_relu(x, modules.LRELU_SLOPE)
-                    fmap.append(x)
-            x = self.conv_post(x)
-            fmap.append(x)
-            x = torch.flatten(x, 1, -1)
+        for l in self.convs:
+                x = l(x)
+                x = F.leaky_relu(x, modules.LRELU_SLOPE)
+                fmap.append(x)
+        x = self.conv_post(x)
+        fmap.append(x)
+        x = torch.flatten(x, 1, -1)
 
-            return x, fmap
+        return x, fmap
 
 
 class DiscriminatorS(nn.Module):
@@ -424,32 +412,15 @@ class SynthesizerTrn(nn.Module):
         gin_channels=0,
         align_noise=0.01,
         align_noise_decay=1e-6,
+        align_noise_min=0,
         **kwargs):
 
         super().__init__()
         assert len(dilation_rate) == n_flows
-        self.text_channels = text_channels
-        self.spec_channels = spec_channels
-        self.inter_channels = inter_channels
-        self.hidden_channels = hidden_channels
-        self.filter_channels = filter_channels
-        self.n_heads = n_heads
-        self.n_layers = n_layers
-        self.kernel_size = kernel_size
-        self.p_dropout = p_dropout
-        self.resblock = resblock
-        self.resblock_kernel_sizes = resblock_kernel_sizes
-        self.resblock_dilation_sizes = resblock_dilation_sizes
-        self.upsample_rates = upsample_rates
-        self.upsample_initial_channel = upsample_initial_channel
-        self.upsample_kernel_sizes = upsample_kernel_sizes
         self.segment_size = segment_size
-        self.dilation_rate=dilation_rate
-        self.n_flows=n_flows
-        self.n_speakers = n_speakers
-        self.gin_channels = gin_channels
         self.align_noise = align_noise
         self.align_noise_decay = align_noise_decay
+        self.align_noise_min = align_noise_min
 
         self.enc_p = TextEncoder(text_channels, inter_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout, ffn=ffn, gin_channels=gin_channels)
         self.dec = Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
@@ -488,6 +459,7 @@ class SynthesizerTrn(nn.Module):
                 epsilon = torch.std(neg_cent) * torch.randn_like(neg_cent) * self.align_noise
                 neg_cent = neg_cent + epsilon
                 self.align_noise -= self.align_noise_decay
+                self.align_noise = max(self.align_noise, self.align_noise_min)
 
             attn_mask = torch.unsqueeze(x_mask, 2) * torch.unsqueeze(y_mask, -1)
             attn = monotonic_align.maximum_path(neg_cent, attn_mask.squeeze(1)).detach()
@@ -506,10 +478,8 @@ class SynthesizerTrn(nn.Module):
 
         # forward generate
         z_q = self.flow(m_p + torch.randn_like(m_p) * torch.exp(logs_p), y_mask, g=g, reverse=True)
-        z_slice = commons.slice_segments(z_q, ids_slice, self.segment_size)
-        o_q = self.dec(z_slice, g=g)
 
-        return o, l_length, attn, ids_slice, x_mask, y_mask, (z, z_p, m_p, logs_p, m_q, logs_q), z_q, o_q
+        return o, l_length, attn, ids_slice, x_mask, y_mask, (z, z_p, m_p, logs_p, m_q, logs_q), z_q
 
     def inference(self, x, x_lengths, emo, sid=None, noise_scale=1, length_scale=1, max_len=None):
         g = self.emb_g(sid) # [b, h]
@@ -549,7 +519,7 @@ class SynthesizerTrn(nn.Module):
 
         z_p = m_p + torch.randn_like(m_p) * torch.exp(logs_p) * noise_scale
         z = self.flow.infer(z_p, g=g, reverse=True)
-        o = self.dec(z, g=g)
+        o = self.dec.infer(z, g=g)
         return o
     
     @torch.no_grad()
@@ -568,7 +538,7 @@ class SynthesizerTrn(nn.Module):
         s_p = torch.matmul(attn, s_p.transpose(1, 2)).transpose(1, 2)
         z_p = m_p + noise * s_p
         z = self.flow.infer(z_p, g=g, reverse=True)
-        o = self.dec(z, g=g)
+        o = self.dec.infer(z, g=g)
         return o
 
 

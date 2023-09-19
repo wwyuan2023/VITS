@@ -37,7 +37,7 @@ class VITSWrap(object):
         self,
         ckpt_path: str = None,
         device: torch.device = None,
-        loglv : int = 0,
+        loglv: int = 0,
     ) -> None:
         self.loglv = loglv
 
@@ -215,8 +215,8 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", "-c", default=None, type=str,
                         help="checkpoint file to be loaded.")
     parser.add_argument("--emotion", "-e", default=None, type=str,
-                        help="speaker Id or emotion file path. format: (spkid|path, eid), "
-                             "which `path` is emotion embedding, `eid` is index.")
+                        help="speaker Id or emotion file path. format: [spkid|path]:eid, "
+                             "which `path` is emotion embedding file, `eid` is index.")
     parser.add_argument('--utterance', '-u', type=str, required=False,
                         help='Input utterance with UTF-8 encoding to synthesize.')
     parser.add_argument('--textfile', '-t', type=str, required=False,

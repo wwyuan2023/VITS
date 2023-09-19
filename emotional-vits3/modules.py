@@ -182,6 +182,71 @@ class WN(nn.Module):
         return output
 
 
+class ConvNeXtBlock1(nn.Module):
+    """ConvNeXt Block adapted from https://github.com/facebookresearch/ConvNeXt to 1D audio signal.
+
+    Args:
+        dim (int): Number of input channels.
+        intermediate_dim (int): Dimensionality of the intermediate layer.
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        intermediate_dim: int = 1536,
+        kernel_size: int = 7,
+        spk_dim: int = 0,
+    ):
+        super().__init__()
+        assert spk_dim > 0 and intermediate_dim % 2 == 0 and kernel_size % 2 == 1
+        self.dwconv = nn.Conv1d(dim, dim, kernel_size=kernel_size, padding=kernel_size//2, groups=dim)  # depthwise conv
+        self.norm = nn.LayerNorm(dim, eps=1e-6)
+        self.pwconv1 = nn.Linear(dim, intermediate_dim)  # pointwise/1x1 convs, implemented with linear layers
+        self.pwconv2 = nn.Linear(intermediate_dim//2, dim)
+        self.cond = nn.Linear(spk_dim, intermediate_dim)
+
+    def forward(self, x, g):
+        residual = x # (B, C, T)
+        x = self.dwconv(x)
+        x = self.norm(x.transpose(1, 2))
+        x = self.pwconv1(x)
+        g = self.cond(g)
+        x = torch.tanh(x + g.unsqueeze(1))
+        x = self.pwconv2(x)
+        x = residual + x.transpose(1, 2)
+        return x # (B, C, T)
+
+
+class ConvNeXtBlock2(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        intermediate_dim: int = 2048,
+        kernel_size: int = 7,
+        spk_dim: int = 0,
+    ):
+        super().__init__()
+        assert spk_dim > 0 and intermediate_dim % 2 == 0 and kernel_size % 2 == 1
+        self.dwconv = nn.Conv1d(dim, dim, kernel_size=kernel_size, padding=kernel_size//2, groups=dim)  # depthwise conv
+        self.norm = nn.LayerNorm(dim, eps=1e-6)
+        self.pwconv1 = nn.Linear(dim, intermediate_dim)  # pointwise/1x1 convs, implemented with linear layers
+        self.pwconv2 = nn.Linear(intermediate_dim//2, dim)
+        self.cond = nn.Linear(spk_dim, intermediate_dim)
+
+    def forward(self, x, g):
+        residual = x # (B, C, T)
+        x = self.dwconv(x)
+        x = self.norm(x.transpose(1, 2))
+        x = self.pwconv1(x)
+        g = self.cond(g)
+        xa, xb = torch.chunk(x, 2, dim=-1)
+        sa, sb = torch.chunk(g, 2, dim=-1)
+        x = torch.tanh(xa + sa.unsqueeze(1)) * torch.sigmoid(xb + sb.unsqueeze(1))
+        x = self.pwconv2(x)
+        x = residual + x.transpose(1, 2)
+        return x # (B, C, T)
+
+
 class ResBlock1(nn.Module):
     def __init__(self, channels, kernel_size=3, dilation=(1, 3, 5), gin_channels=0):
         super().__init__()
@@ -189,7 +254,7 @@ class ResBlock1(nn.Module):
         self.convs1 = nn.ModuleList([
             weight_norm(
                 nn.Conv1d(
-                    channels, inter_channels, kernel_size, 1, dilation=d, 
+                    channels, inter_channels*2, kernel_size, 1, dilation=d, 
                     padding=get_padding(kernel_size, d)
                 )
             ) for d in dilation
@@ -207,17 +272,16 @@ class ResBlock1(nn.Module):
         self.convs2.apply(init_weights)
 
         self.conds = nn.ModuleList([
-            weight_norm(nn.Linear(gin_channels, inter_channels)) for _ in dilation
+            weight_norm(nn.Linear(gin_channels, inter_channels*2)) for _ in dilation
         ])
-        
+    
         self.infer = self.forward
 
-    def forward(self, x, g):
+    def forward(self, x, g=None):
         for c1, c2, cs in zip(self.convs1, self.convs2, self.conds):
             xt = F.leaky_relu(x, LRELU_SLOPE)
             xt = c1(xt)
             gs = cs(g)
-            #xt = F.leaky_relu(xt, LRELU_SLOPE)
             xt = torch.tanh(xt + gs.unsqueeze(-1))
             xt = c2(xt)
             x = xt + x
@@ -254,7 +318,7 @@ class ResBlock2(nn.Module):
         
         self.infer = self.forward
 
-    def forward(self, x, g):
+    def forward(self, x, g=None):
         for c1, c2, cs in zip(self.convs1, self.convs2, self.conds):
             xt = F.leaky_relu(x, LRELU_SLOPE)
             xt = c1(xt)
@@ -381,3 +445,27 @@ class ResidualCouplingLayer(nn.Module):
         x = torch.cat([x0, x1], 1)
         return x
 
+
+class TorchSTFT(nn.Module):
+    def __init__(self, fft_size, hop_size, win_size=None):
+        super().__init__()
+        self.fft_size = fft_size
+        self.hop_size = hop_size
+        self.win_size = win_size if win_size is not None else fft_size
+        self.register_buffer("window", torch.hann_window(self.win_size), persistent=False)
+    
+    def stft(self, x):
+        # x: (B, t)
+        spec = torch.stft(x,
+            n_fft=self.fft_size, hop_length=self.hop_size, 
+            win_length=self.win_size, window=self.window,
+            center=True, pad_mode='reflect', return_complex=False) # (B, F, T, 2), F=n_fft//2+1, T=t//hop_size+1
+        return spec[..., 0], spec[..., 1]
+    
+    def istft(self, real, imag):
+        # real/imag: (B, F, T), n_fft//2+1
+        x = torch.istft(torch.complex(real, imag),
+            n_fft=self.fft_size, hop_length=self.hop_size, 
+            win_length=self.win_size, window=self.window,
+            center=True, return_complex=False)
+        return x # (B, t), t=(T-1)*hop_size

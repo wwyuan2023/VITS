@@ -203,7 +203,10 @@ class ConvNeXtBlock1(nn.Module):
         self.norm = nn.LayerNorm(dim, eps=1e-6)
         self.pwconv1 = nn.Linear(dim, intermediate_dim)  # pointwise/1x1 convs, implemented with linear layers
         self.pwconv2 = nn.Linear(intermediate_dim//2, dim)
-        self.cond = nn.Linear(spk_dim, intermediate_dim)
+        self.cond = weight_norm(nn.Linear(spk_dim, intermediate_dim))
+        
+        self.apply(init_weights)
+        self.infer = self.forward
 
     def forward(self, x, g):
         residual = x # (B, C, T)
@@ -231,7 +234,10 @@ class ConvNeXtBlock2(nn.Module):
         self.norm = nn.LayerNorm(dim, eps=1e-6)
         self.pwconv1 = nn.Linear(dim, intermediate_dim)  # pointwise/1x1 convs, implemented with linear layers
         self.pwconv2 = nn.Linear(intermediate_dim//2, dim)
-        self.cond = nn.Linear(spk_dim, intermediate_dim)
+        self.cond = weight_norm(nn.Linear(spk_dim, intermediate_dim))
+        
+        self.apply(init_weights)
+        self.infer = self.forward
 
     def forward(self, x, g):
         residual = x # (B, C, T)
@@ -259,8 +265,6 @@ class ResBlock1(nn.Module):
                 )
             ) for d in dilation
         ])
-        self.convs1.apply(init_weights)
-
         self.convs2 = nn.ModuleList([
             weight_norm(
                 nn.Conv1d(
@@ -269,12 +273,11 @@ class ResBlock1(nn.Module):
                 )
             ) for _ in dilation
         ])
-        self.convs2.apply(init_weights)
-
         self.conds = nn.ModuleList([
             weight_norm(nn.Linear(gin_channels, inter_channels*2)) for _ in dilation
         ])
-    
+
+        self.apply(init_weights)
         self.infer = self.forward
 
     def forward(self, x, g=None):
@@ -300,8 +303,6 @@ class ResBlock2(nn.Module):
                 )
             ) for d in dilation
         ])
-        self.convs1.apply(init_weights)
-
         self.convs2 = nn.ModuleList([
             weight_norm(
                 nn.Conv1d(
@@ -310,12 +311,11 @@ class ResBlock2(nn.Module):
                 )
             ) for _ in dilation
         ])
-        self.convs2.apply(init_weights)
-
         self.conds = nn.ModuleList([
             weight_norm(nn.Linear(gin_channels, inter_channels)) for _ in dilation
         ])
         
+        self.apply(init_weights)
         self.infer = self.forward
 
     def forward(self, x, g=None):

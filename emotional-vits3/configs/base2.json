@@ -56,6 +56,7 @@
         "generator": "2",
         "kernel_size_q": 5,
         "n_layers_q": 16,
+        "p_dropout_d": 0.5,
         "hidden_size_d": 256,
         "kernel_size_d": 5,
         "act_func_d": "ReLU",

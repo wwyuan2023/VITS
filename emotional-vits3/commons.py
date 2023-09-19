@@ -6,8 +6,7 @@ from torch.nn import functional as F
 
 
 def init_weights(m, mean=0.0, std=0.01):
-    classname = m.__class__.__name__
-    if classname.find("Conv") != -1:
+    if isinstance(m, (nn.Conv1d, nn.Linear)):
         m.weight.data.normal_(mean, std)
 
 

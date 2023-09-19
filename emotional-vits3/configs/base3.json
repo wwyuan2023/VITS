@@ -58,6 +58,7 @@
         "n_layers_q": 16,
         "hidden_size_d": 256,
         "kernel_size_d": 5,
+        "p_dropout_d": 0.5,
         "act_func_d": "ReLU",
         "act_func_params_d": {},
         "use_spectral_norm": false,

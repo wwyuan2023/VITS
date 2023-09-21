@@ -15,13 +15,17 @@ from torch.cuda.amp import autocast, GradScaler
 import commons
 import utils
 from data_utils import TextAudioSpeakerLoader, TextAudioSpeakerCollate, DistributedBucketSampler
-from models import SynthesizerTrn, MultiPeriodDiscriminator
-from losses import generator_loss, discriminator_loss, feature_loss, kl_loss
+from models import SynthesizerTrn, DurationDiscriminator
+from mrd import MultiWaveSTFTDiscriminator
+from stft_loss import MultiResolutionSTFTLoss
+from losses import generator_loss, discriminator_loss, kl_loss
 from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
+from radam import RAdam
 
 
 torch.backends.cudnn.benchmark = True
 global_step = 0
+use_dur_dis = False
 
 
 def main():
@@ -30,14 +34,15 @@ def main():
 
     n_gpus = torch.cuda.device_count()
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '9795'
+    os.environ['MASTER_PORT'] = '29795'
 
     hps = utils.get_hparams()
     mp.spawn(run, nprocs=n_gpus, args=(n_gpus, hps))
 
 
 def run(rank, n_gpus, hps):
-    global global_step
+    global global_step, use_dur_dis
+    use_dur_dis = hps.use_dur_dis
     if rank == 0:
         logger = utils.get_logger(hps.model_dir)
         logger.info(hps)
@@ -78,7 +83,9 @@ def run(rank, n_gpus, hps):
         align_noise_decay=hps.train.align_noise_decay,
         **hps.model
     ).cuda(rank)
-    net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda(rank)
+    net_d = MultiWaveSTFTDiscriminator().cuda(rank)
+    net_p = DurationDiscriminator(hps.model.hidden_channels, 64, 5).cuda(rank) if use_dur_dis else None
+    mstft_loss = MultiResolutionSTFTLoss().cuda(rank)
     
     optim_g = torch.optim.AdamW(
         net_g.parameters(),
@@ -87,13 +94,20 @@ def run(rank, n_gpus, hps):
         weight_decay=hps.train.weight_decay,
         eps=hps.train.eps
     )
-    optim_d = torch.optim.AdamW(
+    optim_d = RAdam(
         net_d.parameters(),
-        hps.train.learning_rate,
-        betas=hps.train.betas,
+        1e-4,
+        betas=(0.9, 0.999),
         weight_decay=0,
-        eps=hps.train.eps
+        eps=1e-6
     )
+    optim_p = RAdam(
+        net_p.parameters(),
+        1e-4,
+        betas=(0.9, 0.999),
+        weight_decay=0,
+        eps=1e-6
+    ) if use_dur_dis else None
     
     if rank == 0:
         logger.info(net_g)
@@ -105,12 +119,16 @@ def run(rank, n_gpus, hps):
 
     net_g = DDP(net_g, device_ids=[rank])
     net_d = DDP(net_d, device_ids=[rank])
+    if use_dur_dis: net_d = DDP(net_d, device_ids=[rank])
 
     try:
         ckptG = utils.latest_checkpoint_path(hps.model_dir, "G_*.pth") if hps.ckptG is None else hps.ckptG
         ckptD = utils.latest_checkpoint_path(hps.model_dir, "D_*.pth") if hps.ckptD is None else hps.ckptD
+        ckptP = utils.latest_checkpoint_path(hps.model_dir, "P_*.pth")
         _, _, epoch_str = utils.load_checkpoint(ckptG, net_g, optim_g, adapt=hps.adapt)
         _, _, epoch_str = utils.load_checkpoint(ckptD, net_d, optim_d, adapt=hps.adapt)
+        if use_dur_dis and ckptP is not None:
+            utils.load_checkpoint(ckptP, net_p, optim_p, adapt=hps.adapt)
         global_step = (epoch_str - 1) * len(train_loader)
     except:
         epoch_str = 1
@@ -118,26 +136,29 @@ def run(rank, n_gpus, hps):
 
     scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=hps.train.lr_decay, last_epoch=-1)
     scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=hps.train.lr_decay, last_epoch=-1)
+    if use_dur_dis: scheduler_p = torch.optim.lr_scheduler.ExponentialLR(optim_p, gamma=hps.train.lr_decay, last_epoch=-1)
 
     scaler = GradScaler(enabled=hps.train.fp16_run)
 
     for epoch in range(epoch_str, hps.train.epochs + 1):
         if rank==0:
-            train_and_evaluate(rank, epoch, hps, [net_g, net_d], [optim_g, optim_d], scaler, [train_loader, eval_loader], logger, [writer, writer_eval])
+            train_and_evaluate(rank, epoch, hps, [net_g, net_d, net_p, mstft_loss], [optim_g, optim_d, optim_p], scaler, [train_loader, eval_loader], logger, [writer, writer_eval])
         else:
-            train_and_evaluate(rank, epoch, hps, [net_g, net_d], [optim_g, optim_d], scaler, [train_loader, None], None, None)
+            train_and_evaluate(rank, epoch, hps, [net_g, net_d, net_p, mstft_loss], [optim_g, optim_d, optim_p], scaler, [train_loader, None], None, None)
         scheduler_g.step()
         scheduler_d.step()
+        if use_dur_dis: scheduler_p.step()
         if (hps.adapt and global_step > hps.train.steps) or optim_g.param_groups[0]['lr'] <= 5e-6:
             break
 
     utils.save_checkpoint(net_g, optim_g, epoch, os.path.join(hps.model_dir, "G_{}.pth".format(global_step)))
     utils.save_checkpoint(net_d, optim_d, epoch, os.path.join(hps.model_dir, "D_{}.pth".format(global_step)))
+    if use_dur_dis: utils.save_checkpoint(net_p, optim_p, epoch, os.path.join(hps.model_dir, "P_{}.pth".format(global_step)))
 
 
 def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, writers):
-    net_g, net_d = nets
-    optim_g, optim_d = optims
+    net_g, net_d, net_p, mstft_loss = nets
+    optim_g, optim_d, optim_p = optims
     train_loader, eval_loader = loaders
     if writers is not None:
         writer, writer_eval = writers
@@ -147,6 +168,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
 
     net_g.train()
     net_d.train()
+    if use_dur_dis: net_p.train()
     for batch_idx, (x, x_lengths, spec, spec_lengths, y, y_lengths, emo, speakers) in enumerate(train_loader):
         x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(rank, non_blocking=True)
         spec, spec_lengths = spec.cuda(rank, non_blocking=True), spec_lengths.cuda(rank, non_blocking=True)
@@ -158,17 +180,10 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
             y_hat, l_length, attn, ids_slice, x_mask, z_mask,\
             (z, z_p, m_p, logs_p, m_q, logs_q), z_q, (x_hidden, logw, logw_) = net_g(x, x_lengths, spec, spec_lengths, emo, speakers)
 
-            mel = spec_to_mel_torch(
-                spec, 
-                hps.data.filter_length, 
-                hps.data.n_mel_channels, 
-                hps.data.sampling_rate,
-                hps.data.mel_fmin, 
-                hps.data.mel_fmax
-            )
-            y_mel = commons.slice_segments(mel, ids_slice, hps.train.segment_size // hps.data.hop_length)
-            y_hat_mel = mel_spectrogram_torch(
-                y_hat.squeeze(1), 
+            y = commons.slice_segments(y, ids_slice * hps.data.hop_length, hps.train.segment_size) # slice
+            
+            y_mel = mel_spectrogram_torch(
+                y[:1].squeeze(1), 
                 hps.data.filter_length, 
                 hps.data.n_mel_channels, 
                 hps.data.sampling_rate, 
@@ -177,31 +192,53 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
                 hps.data.mel_fmin, 
                 hps.data.mel_fmax
             )
-
-            y = commons.slice_segments(y, ids_slice * hps.data.hop_length, hps.train.segment_size) # slice 
+            y_hat_mel = mel_spectrogram_torch(
+                y_hat[:1].squeeze(1), 
+                hps.data.filter_length, 
+                hps.data.n_mel_channels, 
+                hps.data.sampling_rate, 
+                hps.data.hop_length, 
+                hps.data.win_length, 
+                hps.data.mel_fmin, 
+                hps.data.mel_fmax
+            )
+            
+            sc_loss, mag_loss, y_mag, y_hat_mag = mstft_loss(y.squeeze(1), y_hat.squeeze(1))
 
             # Discriminator
-            y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
+            y_d_hat_r = net_d(y, y_mag)
+            y_d_hat_g = net_d(y_hat.detach(), [x.detach() for x in y_hat_mag])
+            if use_dur_dis: d_d_hat_r, d_d_hat_g = net_p(x_hidden, x_mask, logw, logw_.detach())
             with autocast(enabled=False):
                 loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
+                if use_dur_dis: loss_disc_p, losses_p_r, losses_p_g = discriminator_loss(d_d_hat_r, d_d_hat_g)
                 loss_disc_all = loss_disc
         optim_d.zero_grad()
         scaler.scale(loss_disc_all).backward()
         scaler.unscale_(optim_d)
         grad_norm_d = commons.clip_grad_value_(net_d.parameters(), None)
         scaler.step(optim_d)
+        if use_dur_dis:
+            optim_p.zero_grad()
+            scaler.scale(loss_disc_p).backward()
+            scaler.unscale_(optim_p)
+            grad_norm_p = commons.clip_grad_value_(net_p.parameters(), None)
+            scaler.step(optim_p)
 
         with autocast(enabled=hps.train.fp16_run):
             # Generator
-            y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
+            y_d_hat_g = net_d(y_hat, y_hat_mag)
+            if use_dur_dis: d_d_hat_r, d_d_hat_g = net_p(x_hidden, x_mask, logw, logw_)
             with autocast(enabled=False):
                 loss_dur = torch.sum(l_length.float()) * hps.train.c_dur
-                loss_mel = F.l1_loss(y_mel, y_hat_mel) * hps.train.c_mel
+                loss_stft = (sc_loss.float() + mag_loss.float()) * hps.train.c_stft
                 loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * hps.train.c_kl
                 loss_kl_q = kl_loss(z_q, logs_p, m_q, logs_q, z_mask) * hps.train.c_kl_q
-                loss_fm = feature_loss(fmap_r, fmap_g)
                 loss_gen, losses_gen = generator_loss(y_d_hat_g)
-                loss_gen_all = loss_gen + loss_fm + loss_mel + loss_dur + loss_kl + loss_kl_q
+                loss_gen_all = loss_gen + loss_stft + loss_dur + loss_kl + loss_kl_q
+                if use_dur_dis:
+                    loss_gen_p, losses_gen_p = generator_loss(d_d_hat_g)
+                    loss_gen_all = loss_gen_all + loss_gen_p
         optim_g.zero_grad()
         scaler.scale(loss_gen_all).backward()
         scaler.unscale_(optim_g)
@@ -212,15 +249,20 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
         if rank==0:
             if global_step % hps.train.log_interval == 0:
                 lr = optim_g.param_groups[0]['lr']
-                losses = [loss_disc, loss_gen, loss_fm, loss_mel, loss_dur, loss_kl, loss_kl_q]
+                losses = [loss_disc, loss_gen, loss_stft, loss_dur, loss_kl, loss_kl_q]
+                if use_dur_dis: losses.append(loss_gen_p)
                 logger.info('Train Epoch: {} [{:.0f}%]'.format(
                     epoch,
                     100. * batch_idx / len(train_loader)))
                 logger.info([f"{x.item():.05f}" for x in losses] + [f"{global_step}", f"{lr:.06f}"])
                 
                 scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all, "learning_rate": lr, "grad_norm_d": grad_norm_d, "grad_norm_g": grad_norm_g}
-                scalar_dict.update({"loss/g/fm": loss_fm, "loss/g/mel": loss_mel, "loss/g/dur": loss_dur, "loss/g/kl": loss_kl})
-                scalar_dict.update({"loss/g/kl_q": loss_kl_q})
+                scalar_dict.update({"loss/g/stft": loss_stft, "loss/g/dur": loss_dur, "loss/g/kl": loss_kl, "loss/g/kl_q": loss_kl_q})
+                if use_dur_dis:
+                    scalar_dict.update({"loss/p/total": loss_disc_p, "grad_norm_p": grad_norm_p})
+                    scalar_dict.update({"loss/p/{}".format(i): v for i, v in enumerate(losses_gen_p)})
+                    scalar_dict.update({"loss/p_r/{}".format(i): v for i, v in enumerate(losses_p_r)})
+                    scalar_dict.update({"loss/p_g/{}".format(i): v for i, v in enumerate(losses_p_g)})
 
                 scalar_dict.update({"loss/g/{}".format(i): v for i, v in enumerate(losses_gen)})
                 scalar_dict.update({"loss/d_r/{}".format(i): v for i, v in enumerate(losses_disc_r)})
@@ -228,7 +270,6 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
                 image_dict = { 
                         "slice/mel_org": utils.plot_spectrogram_to_numpy(y_mel[0].data.cpu().numpy()),
                         "slice/mel_gen": utils.plot_spectrogram_to_numpy(y_hat_mel[0].data.cpu().numpy()), 
-                        "all/mel": utils.plot_spectrogram_to_numpy(mel[0].data.cpu().numpy()),
                         "all/attn": utils.plot_alignment_to_numpy(attn[0].data.cpu().numpy())
                 }
                 utils.summarize(
@@ -242,6 +283,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
                 evaluate(hps, net_g, eval_loader, writer_eval)
                 utils.save_checkpoint(net_g, optim_g, epoch, os.path.join(hps.model_dir, "G_{}.pth".format(global_step)))
                 utils.save_checkpoint(net_d, optim_d, epoch, os.path.join(hps.model_dir, "D_{}.pth".format(global_step)))
+                if use_dur_dis: utils.save_checkpoint(net_p, optim_p, epoch, os.path.join(hps.model_dir, "P_{}.pth".format(global_step)))
         global_step += 1
     
     if rank == 0:
@@ -272,14 +314,14 @@ def evaluate(hps, generator, eval_loader, writer_eval):
         y_hat_lengths = mask.sum([1,2]).long() * hps.data.hop_length
 
         mel = spec_to_mel_torch(
-            spec,
+            spec[:1],
             hps.data.filter_length,
             hps.data.n_mel_channels,
             hps.data.sampling_rate,
             hps.data.mel_fmin,
             hps.data.mel_fmax)
         y_hat_mel = mel_spectrogram_torch(
-            y_hat.squeeze(1).float(),
+            y_hat[:1].squeeze(1).float(),
             hps.data.filter_length,
             hps.data.n_mel_channels,
             hps.data.sampling_rate,

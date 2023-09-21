@@ -460,7 +460,7 @@ class TorchSTFT(nn.Module):
             n_fft=self.fft_size, hop_length=self.hop_size, 
             win_length=self.win_size, window=self.window,
             center=True, pad_mode='reflect', return_complex=False) # (B, F, T, 2), F=n_fft//2+1, T=t//hop_size+1
-        return spec[..., 0], spec[..., 1]
+        return spec[..., 0], spec[..., 1] # (B, F, T)
     
     def istft(self, real, imag):
         # real/imag: (B, F, T), n_fft//2+1

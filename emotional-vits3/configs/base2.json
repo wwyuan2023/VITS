@@ -3,7 +3,7 @@
         "log_interval": 1000,
         "eval_interval": 1000,
         "seed": 1234,
-        "epochs": 10000,
+        "epochs": 500,
         "steps": 3000,
         "learning_rate": 2e-4,
         "betas": [0.8, 0.99],
@@ -14,10 +14,11 @@
         "segment_size": 9216,
         "weight_decay": 0.01,
         "c_mel": 45,
+        "c_stft": 25,
         "c_dur": 2,
         "c_kl": 1.0,
         "c_kl_q": 0.01,
-        "align_noise": 0.01,
+        "align_noise": 1e-2,
         "align_noise_decay": 1e-6,
         "align_noise_min": 1e-4
     },
@@ -34,7 +35,7 @@
         "n_mel_channels": 80,
         "mel_fmin": 0.0,
         "mel_fmax": null,
-        "n_speakers": 1024,
+        "n_speakers": 2048,
         "noise_scale": 0.707
     },
     "model": {

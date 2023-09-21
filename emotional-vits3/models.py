@@ -407,15 +407,15 @@ class DiscriminatorP(nn.Module):
         # 1d to 2d
         b, c, t = x.shape
         if t % self.period != 0: # pad first
-                n_pad = self.period - (t % self.period)
-                x = F.pad(x, (0, n_pad), "reflect")
-                t = t + n_pad
+            n_pad = self.period - (t % self.period)
+            x = F.pad(x, (0, n_pad), "reflect")
+            t = t + n_pad
         x = x.view(b, c, t // self.period, self.period)
 
         for l in self.convs:
-                x = l(x)
-                x = F.leaky_relu(x, modules.LRELU_SLOPE)
-                fmap.append(x)
+            x = l(x)
+            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            fmap.append(x)
         x = self.conv_post(x)
         fmap.append(x)
         x = torch.flatten(x, 1, -1)
@@ -441,9 +441,9 @@ class DiscriminatorS(nn.Module):
         fmap = []
 
         for l in self.convs:
-                x = l(x)
-                x = F.leaky_relu(x, modules.LRELU_SLOPE)
-                fmap.append(x)
+            x = l(x)
+            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            fmap.append(x)
         x = self.conv_post(x)
         fmap.append(x)
         x = torch.flatten(x, 1, -1)
@@ -466,12 +466,12 @@ class MultiPeriodDiscriminator(nn.Module):
         fmap_rs = []
         fmap_gs = []
         for i, d in enumerate(self.discriminators):
-                y_d_r, fmap_r = d(y)
-                y_d_g, fmap_g = d(y_hat)
-                y_d_rs.append(y_d_r)
-                y_d_gs.append(y_d_g)
-                fmap_rs.append(fmap_r)
-                fmap_gs.append(fmap_g)
+            y_d_r, fmap_r = d(y)
+            y_d_g, fmap_g = d(y_hat)
+            y_d_rs.append(y_d_r)
+            y_d_gs.append(y_d_g)
+            fmap_rs.append(fmap_r)
+            fmap_gs.append(fmap_g)
 
         return y_d_rs, y_d_gs, fmap_rs, fmap_gs
 
@@ -620,7 +620,7 @@ class SynthesizerTrn(nn.Module):
         return o, attn, y_mask, (z, z_p, m_p, logs_p)
     
     @torch.no_grad()
-    def infer(self, x, emo, sid, noise_scale=0.35, length_scale=1):
+    def infer(self, x, emo, sid, noise_scale=0.707, length_scale=1.0):
         assert x.size(0) == 1
         x_lengths = x.size(1)
         g = self.emb_g(sid) # [b, h]

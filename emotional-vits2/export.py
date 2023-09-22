@@ -66,6 +66,8 @@ def main():
                         help="yaml format configuration file.")
     parser.add_argument("--discriminator", "--dis", "-d", action='store_true',
                         help="export discriminator if setting true, default is generator.")
+    parser.add_argument("--init-spk-embed", action='store_true',
+                        help="initialize speaker embedding, default not.")
     parser.add_argument("--greedy-soup", "--greedy", action='store_true',
                         help="use average of checkpoints.")
     parser.add_argument("--convert", "-c", default=0, type=int,
@@ -104,6 +106,10 @@ def main():
 
     # load model
     model = load_model(args.checkpoint, hps, greedy=args.greedy_soup, is_dis=args.discriminator)
+    
+    # initialize speaker embedding
+    if args.init_spk_embed and not args.discriminator:
+        model.emb_g.weight.data.normal_()
     
     # print parameters
     logging.info(model)

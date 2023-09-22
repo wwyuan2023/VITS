@@ -23,7 +23,7 @@ pip install textparser-${lastest-version}.tar.gz
 # 生成文本vector
 outdir=dataset/vec
 mkdir $outdir
-cat dataset/txt/*.lab | text-vectorization $outdir
+cat dataset/txt/*.lab | text-vectorization -o $outdir
 
 # 提取情感向量
 outdir=dataset/emo

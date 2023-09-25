@@ -71,7 +71,7 @@ class MultiWaveDiscriminator(nn.Module):
                 2**i,
                 kernel_size,
                 layers,
-                conv_channels,
+                conv_channels+i*32,
                 use_weight_norm=use_weight_norm
             ) for i in range(num_dwt)
         ])

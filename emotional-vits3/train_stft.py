@@ -123,8 +123,8 @@ def run(rank, n_gpus, hps):
         global_step = 0
 
     scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=hps.train.lr_decay, last_epoch=-1)
-    scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=0.999875, last_epoch=-1)
-    if use_dur_dis: scheduler_p = torch.optim.lr_scheduler.ExponentialLR(optim_p, gamma=0.999875, last_epoch=-1)
+    scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=hps.train.lr_decay, last_epoch=-1)
+    if use_dur_dis: scheduler_p = torch.optim.lr_scheduler.ExponentialLR(optim_p, gamma=hps.train.lr_decay, last_epoch=-1)
 
     scaler = GradScaler(enabled=hps.train.fp16_run)
 
@@ -169,16 +169,16 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
             (z, z_p, m_p, logs_p, m_q, logs_q), z_q, (x_hidden, logw, logw_) = net_g(x, x_lengths, spec, spec_lengths, emo, speakers)
 
             mel = spec_to_mel_torch(
-                spec, 
+                spec[:1], 
                 hps.data.filter_length, 
                 hps.data.n_mel_channels, 
                 hps.data.sampling_rate,
                 hps.data.mel_fmin, 
                 hps.data.mel_fmax
             )
-            y_mel = commons.slice_segments(mel, ids_slice, hps.train.segment_size // hps.data.hop_length)
+            y_mel = commons.slice_segments(mel, ids_slice[:1], hps.train.segment_size // hps.data.hop_length)
             y_hat_mel = mel_spectrogram_torch(
-                y_hat.squeeze(1), 
+                y_hat[:1].squeeze(1), 
                 hps.data.filter_length, 
                 hps.data.n_mel_channels, 
                 hps.data.sampling_rate, 
@@ -218,12 +218,11 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
             if use_dur_dis: d_d_hat_r, d_d_hat_g = net_p(x_hidden, x_mask, logw, logw_)
             with autocast(enabled=False):
                 loss_dur = torch.sum(l_length.float()) * hps.train.c_dur
-                loss_mel = F.l1_loss(y_mel, y_hat_mel) * hps.train.c_mel
                 loss_stft = (sc_loss.float() + mag_loss.float()) * hps.train.c_stft
                 loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * hps.train.c_kl
                 loss_kl_q = kl_loss(z_q, logs_p, m_q, logs_q, z_mask) * hps.train.c_kl_q
                 loss_gen, losses_gen = generator_loss(y_d_hat_g)
-                loss_gen_all = loss_gen + loss_mel + loss_stft + loss_dur + loss_kl + loss_kl_q
+                loss_gen_all = loss_gen + loss_stft + loss_dur + loss_kl + loss_kl_q
                 if use_dur_dis:
                     loss_gen_p, losses_gen_p = generator_loss(d_d_hat_g)
                     loss_gen_all = loss_gen_all + loss_gen_p
@@ -237,7 +236,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
         if rank==0:
             if global_step % hps.train.log_interval == 0:
                 lr = optim_g.param_groups[0]['lr']
-                losses = [loss_disc, loss_gen, loss_mel, loss_stft, loss_dur, loss_kl, loss_kl_q]
+                losses = [loss_disc, loss_gen, loss_stft, loss_dur, loss_kl, loss_kl_q]
                 if use_dur_dis: losses.append(loss_gen_p)
                 logger.info('Train Epoch: {} [{:.0f}%]'.format(
                     epoch,
@@ -245,7 +244,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, scaler, loaders, logger, 
                 logger.info([f"{x.item():.05f}" for x in losses] + [f"{global_step}", f"{lr:.06f}"])
                 
                 scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all, "learning_rate": lr, "grad_norm_d": grad_norm_d, "grad_norm_g": grad_norm_g}
-                scalar_dict.update({"loss/g/mel": loss_mel, "loss/g/stft": loss_stft, "loss/g/dur": loss_dur, "loss/g/kl": loss_kl, "loss/g/kl_q": loss_kl_q})
+                scalar_dict.update({"loss/g/stft": loss_stft, "loss/g/dur": loss_dur, "loss/g/kl": loss_kl, "loss/g/kl_q": loss_kl_q})
                 if use_dur_dis:
                     scalar_dict.update({"loss/p/total": loss_disc_p, "grad_norm_p": grad_norm_p})
                     scalar_dict.update({"loss/p/{}".format(i): v for i, v in enumerate(losses_gen_p)})

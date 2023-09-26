@@ -33,6 +33,7 @@ class VITSWrap(object):
     default_volume = 1.0
     default_speed = 1.0
     default_pitch = 1.0
+    default_tail_silece = 0.05 # Second
 
     def __init__(
         self,
@@ -65,6 +66,7 @@ class VITSWrap(object):
         speed = float(inputs.get('speed', self.default_speed))
         pitch = float(inputs.get('pitch', self.default_pitch))
         sampling_rate = int(inputs.get('sampling_rate', self.default_sampling_rate))
+        tail_silence = float(inputs.get('tail_silence', self.default_tail_silece))
 
         volume = max(0., min(1., volume))
         speed = max(0.5, min(2., speed))
@@ -78,7 +80,7 @@ class VITSWrap(object):
         spkid = int(inputs.get('spkid', self.default_spkid))
         emotion = inputs.get('emotion')
 
-        return inputs, utt_id, utt_text, spkid, volume, speed, pitch, sampling_rate, emotion
+        return inputs, utt_id, utt_text, spkid, volume, speed, pitch, sampling_rate, tail_silence, emotion
 
     def _handle_outputs(self, inputs, wav_bytes, sampling_rate, segment_info, time_used_frontend, time_used_backend, rtf):
         outputs = inputs
@@ -159,7 +161,7 @@ class VITSWrap(object):
 
     @torch.no_grad()
     def speaking(self, inputs : dict) -> dict:
-        inputs, utt_id, utt_text, spkid, volume, speed, pitch, sampling_rate, emotion = \
+        inputs, utt_id, utt_text, spkid, volume, speed, pitch, sampling_rate, tail_silence, emotion = \
             self._parse_input(inputs)
         
         batch_utt_id, batch_utt_text = self._split_utt_text(utt_id, utt_text)
@@ -180,6 +182,8 @@ class VITSWrap(object):
             if sampling_rate != self.default_sampling_rate:
                 wav = resample(wav, orig_sr=self.default_sampling_rate, target_sr=sampling_rate)
             wav = np.clip(wav * volume * 32767, -32768, 32767).astype(np.int16)
+            if tail_silence > 0:
+                wav = np.pad(wav, [0, int(tail_silence*sampling_rate)])
             batch_wav.append(wav)
             end = time.time()
             time_used_backend += end - start

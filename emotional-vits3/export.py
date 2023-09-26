@@ -10,6 +10,7 @@ import torch
 import utils
 import commons
 from models import SynthesizerTrn, MultiPeriodDiscriminator
+from mrd import MultiWaveSTFTDiscriminator
 
 
 def find_checkpoint_path(dir_path, regex="G_*.pth"):
@@ -18,7 +19,7 @@ def find_checkpoint_path(dir_path, regex="G_*.pth"):
     return f_list
 
 
-def load_model(checkpoint, hps=None, *, greedy=False, is_dis=False):
+def load_model(checkpoint, hps=None, *, greedy=5, is_dis=0):
     # load config if not provided
     if hps is None:
         dirname = checkpoint if os.path.isdir(checkpoint) else \
@@ -27,7 +28,7 @@ def load_model(checkpoint, hps=None, *, greedy=False, is_dis=False):
         hps = utils.get_hparams_from_file(config_path)
 
     # get model
-    if not is_dis:
+    if is_dis == 0:
         model = SynthesizerTrn(
             hps.data.text_channels,
             hps.data.filter_length // 2 + 1,
@@ -35,21 +36,26 @@ def load_model(checkpoint, hps=None, *, greedy=False, is_dis=False):
             n_speakers=hps.data.n_speakers,
             **hps.model
         )
-    else:
+    elif is_dis == 1:
         model = MultiPeriodDiscriminator(hps.model.use_spectral_norm)
+    elif is_dis == 2:
+        model = MultiWaveSTFTDiscriminator()
     
     # load parameters
     ckpt_paths = [checkpoint] if not os.path.isdir(checkpoint) else \
         find_checkpoint_path(checkpoint, "G_*.pth" if not is_dis else "D_*.pth")
+    logging.info(f"Load [{ckpt_paths[-1]}]")
     avg = torch.load(ckpt_paths[-1], map_location="cpu")['model']
-    if greedy and len(ckpt_paths) > 1:
-        for ckpt in ckpt_paths[:-1]:
+    if greedy > 0 and len(ckpt_paths) > 1:
+        N = 1
+        for ckpt in ckpt_paths[max(0,len(ckpt_paths)-greedy):-1]:
             logging.info(f"Load [{ckpt}] for averaging.")
             states = torch.load(ckpt, map_location="cpu")['model']
             for k in avg.keys():
                 avg[k] += states[k]
+            N += 1
         for k in avg.keys():
-            avg[k] = torch.true_divide(avg[k], len(ckpt_paths))
+            avg[k] = torch.true_divide(avg[k], N)
     model.load_state_dict(avg)
 
     return model
@@ -64,12 +70,12 @@ def main():
                         help="checkpoint file to be loaded.")
     parser.add_argument("--config", "--conf", default=None, type=str,
                         help="yaml format configuration file.")
-    parser.add_argument("--discriminator", "--dis", "-d", action='store_true',
-                        help="export discriminator if setting true, default is generator.")
+    parser.add_argument("--discriminator", "--dis", "-d", default=0, type=int,
+                        help="export discriminator if setting non-zero, default is generator.")
     parser.add_argument("--init-spk-embed", action='store_true',
                         help="initialize speaker embedding, default not.")
-    parser.add_argument("--greedy-soup", "--greedy", action='store_true',
-                        help="use average of checkpoints.")
+    parser.add_argument("--greedy-soup", "--greedy", default=5, type=int,
+                        help="use average of lastest N checkpoints. (default N=5)")
     parser.add_argument("--convert", "-c", default=0, type=int,
                         help="convert to TorchScript or ONNX for generator if setting 1/2.")
     parser.add_argument("--verbose", type=int, default=1,

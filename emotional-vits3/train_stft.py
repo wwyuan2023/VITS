@@ -107,7 +107,7 @@ def run(rank, n_gpus, hps):
 
     net_g = DDP(net_g, device_ids=[rank])
     net_d = DDP(net_d, device_ids=[rank])
-    if use_dur_dis: net_d = DDP(net_d, device_ids=[rank])
+    if use_dur_dis: net_p = DDP(net_p, device_ids=[rank])
 
     try:
         ckptG = utils.latest_checkpoint_path(hps.model_dir, "G_*.pth") if hps.ckptG is None else hps.ckptG

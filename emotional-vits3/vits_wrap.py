@@ -33,7 +33,7 @@ class VITSWrap(object):
     default_volume = 1.0
     default_speed = 1.0
     default_pitch = 1.0
-    default_tail_silece = 0.05 # Second
+    default_tail_silece = 0.0 # Second
 
     def __init__(
         self,
@@ -234,6 +234,8 @@ if __name__ == "__main__":
                         help='Set speed, its range is (0.5, 1.0]. (default=1.0)')
     parser.add_argument('--pitch', '-p', type=float, required=False, default=1.0,
                         help='Set pitch, its range is (0.0, 1.0]. (default=1.0)')
+    parser.add_argument('--tail-silence', '-a', type=float, required=False, default=0.0,
+                        help='Set tail silence in second. (default=0.0)')
     parser.add_argument('--sampling-rate', '-r', type=int, required=False,
                         help='Set sampling rate.')
     parser.add_argument('--outdir', '-o', type=str, required=True,
@@ -275,6 +277,10 @@ if __name__ == "__main__":
         "pitch": args.pitch,
         "emotion": emotion,
     }
+    if args.sampling_rate is not None:
+        inputs["sampling_rate"] = args.sampling_rate
+    if args.tail_silence is not None:
+        inputs["tail_silence"] = max(0, args.tail_silence)
     
     utt_text = []
     if args.utterance is not None:

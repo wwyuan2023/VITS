@@ -20,7 +20,7 @@ class STFTLoss(TorchSTFT):
         super().__init__(fft_size, hop_size, win_size)
     
     def spec2mag(self, real, imag):
-        return torch.sqrt(torch.clamp(real**2 + imag**2, min=1e-7))
+        return torch.sqrt(real**2 + imag**2) + 1e-5
 
     def forward(self, x, y):
         """Calculate forward propagation.

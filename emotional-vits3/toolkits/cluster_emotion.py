@@ -10,10 +10,11 @@ from scipy.cluster.vq import kmeans, vq
 import numpy as np
 
 
-assert len(sys.argv) == 4
+assert len(sys.argv) >= 4
 K = int(sys.argv[1])
 scpfn = sys.argv[2]
 outfn = sys.argv[3]
+nearest = True if len(sys.argv) > 4 else False
 
 # load feature
 scplist = []
@@ -30,7 +31,7 @@ print("load from", scpfn, "len =", len(emo))
 # input limited
 emo = np.array(emo) # (L, 1024)
 np.random.shuffle(emo)
-emo = emo[:5000]
+emo = emo[:10000]
 print("shuffle, len =", len(emo))
 
 # remove 10% of outliers
@@ -46,18 +47,21 @@ center, _ = kmeans(emo, min(K, len(emo)))
 print("center.shape =", center.shape)
 #cluster, _ = vq(emo, center)
 
-'''
+# sort center
+dist = np.linalg.norm(center - mean, 2, -1)
+x = np.argsort(dist)
+center = center[x]
+
 # nearest
-dist = np.expand_dims(emo, 0) - np.expand_dims(center, 1) # (K, L, 1024)
-dist = np.linalg.norm(dist, 2, -1) # (K, L)
-idx = dist.argmin(1) # (K,)
-print("nearest indices =", idx)
-nearest = emo[idx]
-'''
+if nearest and not nearest:
+	dist = np.expand_dims(emo, 0) - np.expand_dims(center, 1) # (K, L, 1024)
+	dist = np.linalg.norm(dist, 2, -1) # (K, L)
+	idx = dist.argmin(1) # (K,)
+	print("nearest indices =", idx)
+	center = emo[idx]
 
 # save k-means
 center.tofile(outfn)
-#nearest.tofile(outfn)
 print("save to", outfn)
 
 

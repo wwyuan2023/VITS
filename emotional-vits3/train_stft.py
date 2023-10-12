@@ -113,8 +113,10 @@ def run(rank, n_gpus, hps):
         ckptG = utils.latest_checkpoint_path(hps.model_dir, "G_*.pth") if hps.ckptG is None else hps.ckptG
         ckptD = utils.latest_checkpoint_path(hps.model_dir, "D_*.pth") if hps.ckptD is None else hps.ckptD
         ckptP = utils.latest_checkpoint_path(hps.model_dir, "P_*.pth")
-        _, _, epoch_str = utils.load_checkpoint(ckptG, net_g, optim_g, adapt=hps.adapt)
-        _, _, epoch_str = utils.load_checkpoint(ckptD, net_d, optim_d, adapt=hps.adapt)
+        if ckptG is not None:
+            _, _, epoch_str = utils.load_checkpoint(ckptG, net_g, optim_g, adapt=hps.adapt)
+        if ckptD is not None:
+            _, _, epoch_str = utils.load_checkpoint(ckptD, net_d, optim_d, adapt=hps.adapt)
         if use_dur_dis and ckptP is not None:
             utils.load_checkpoint(ckptP, net_p, optim_p, adapt=hps.adapt)
         global_step = (epoch_str - 1) * len(train_loader)

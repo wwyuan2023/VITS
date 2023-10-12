@@ -115,10 +115,13 @@ def main():
     
     # initialize speaker embedding
     if args.init_spk_embed and not args.discriminator:
-        model.emb_g.weight.data.normal_()
+        logging.info(f"Reset speaker embedding!")
+        #model.emb_g.reset_parameters()
+        for i in range(model.emb_g.weight.data.size(0)):
+            model.emb_g.weight.data[i] = model.emb_g.weight.data[0]
     
     # print parameters
-    logging.info(model)
+    #logging.info(model)
     total_params, trainable_params, nontrainable_params = 0, 0, 0
     for name, param in model.named_parameters():
         if 'enc_q.' in name or '.weight_g' in name:

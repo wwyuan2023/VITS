@@ -38,9 +38,12 @@ rm -f files.scp
 # 格式：vecfn|wavfn|emofn|spkid
 ```
 
-## 3. 开始训练
+## 3. 训练或微调
 ```
+# training from scratch
 python train.py -c configs/base.json -m ${your_model_name}
+# finetune from pretrained
+python {train.py|train_stft.py} -a -d -c configs/adapt.json -m ${your_model_name} --ckptD pretrained/G_0.pth --ckptD pretrained/D_0.pth
 ```
 
 ## 4. 导出模型
@@ -48,12 +51,21 @@ python train.py -c configs/base.json -m ${your_model_name}
 # 注意 checkpoint/ 是模型默认的存储目录，保存ckpt和emo文件
 # 导出ckpt
 python export.py --ckpt logs/${your_model_name}/G_${num}.pth --outdir ./checkpoint/
+# 或者
+python export.py --ckpt logs/${your_model_name}/ --outdir ./checkpoint/ --greedy 3
 # 导出emo，每个发音人都有自己的emo聚类，根据每个发音人风格和录音数目，选择K的大小
 K=7
-python toolkits/cluster_emotion.py $K emo-list-scp checkpoint/${spkid}.emo
+python toolkits/cluster_emotion.py $K emo-list-scp ./checkpoint/${spkid}.emo
 ```
 
-## 5. 部署模型
+## 5. 模型推理
+```
+python vits_wrap.py --help
+python vits_wrap.py -c ./checkpoint/checkpoint.pth -i ${spkid} -t ${input.txt} -o ${output_dir} -n ${output_filename} -d "cuda:0"
+```
+
+
+## 6. 部署模型(忽略)
 ```
 cd web_api
 pip install -r requirments.txt

@@ -70,10 +70,10 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
             raise ValueError("{} {} SR doesn't match target {} SR".format(sampling_rate, self.sampling_rate))
         assert len(audio_norm) >= self.segment_size
         audio_norm = audio_norm.unsqueeze(0)
-        spec_filename = filename.replace(".wav", ".spec.pt")
-        if os.path.exists(spec_filename):
+        spec_filename = filename[:-len(".wav")] + ".spec.pt"
+        try:
             spec = torch.load(spec_filename)
-        else:
+        except:
             spec = spectrogram_torch(audio_norm, self.filter_length,
                 self.sampling_rate, self.hop_length, self.win_length,
                 center=False)

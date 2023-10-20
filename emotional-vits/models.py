@@ -279,7 +279,7 @@ class PosteriorEncoder(nn.Module):
         return z
 
 
-class Generator1(nn.Module):
+class Generator(nn.Module):
     def __init__(self, initial_channel, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=0):
         super().__init__()
         self.num_kernels = len(resblock_kernel_sizes)
@@ -316,74 +316,6 @@ class Generator1(nn.Module):
         x = self.conv_post(x)
         x = torch.tanh(x)
         return x
-
-
-class Generator2(nn.Module):
-    def __init__(self, initial_channel, fft_size, hop_size, win_size, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_channels, upsample_kernel_sizes, gin_channels=0):
-        super().__init__()
-        assert len(upsample_channels) == len(upsample_kernel_sizes) and all([k % 2 == 1 for k in upsample_kernel_sizes])
-        assert len(upsample_channels) == len(resblock_kernel_sizes) == len(resblock_dilation_sizes)
-        self.num_upsamples = len(upsample_channels)
-        upsample_channels.append(initial_channel)
-        
-        self.STFT = modules.TorchSTFT(fft_size, hop_size, win_size)
-        self.conv_pre = Conv1d(initial_channel, initial_channel, 7, 1, padding=3)
-        self.ups = nn.ModuleList()
-        for i, k in enumerate(upsample_kernel_sizes):
-            self.ups.append(weight_norm(Conv1d(upsample_channels[i-1], upsample_channels[i], k, padding=k//2)))
-
-        self.resblocks = nn.ModuleList()
-        for i, (k, d) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
-            ch = upsample_channels[i]
-            self.resblocks.append(getattr(modules, f'ResBlock{resblock}')(ch, k, d, gin_channels))
-
-        self.conv_post = nn.Sequential(
-            nn.PReLU(init=0.142),
-            Conv1d(ch, fft_size+2, 1),
-        )
-        self.ups.apply(init_weights)
-        
-        self.infer = self.forward
-
-    def forward(self, x, g):
-        x = self.conv_pre(x)
-        for i in range(self.num_upsamples):
-            x = F.leaky_relu(x, modules.LRELU_SLOPE)
-            x = self.ups[i](x)
-            x = self.resblocks[i](x, g=g)
-        x = self.conv_post(x)
-        real, imag = torch.chunk(x, 2, dim=1)
-        return self.STFT.istft(real, imag).unsqueeze(1)
-
-
-class Generator3(nn.Module):
-    def __init__(self, initial_channel, fft_size, hop_size, win_size, resblock, dim, intermediate_dim=2048, kernel_size=7, num_blocks=8, gin_channels=0):
-        super().__init__()
-        self.num_blocks = num_blocks
-        
-        self.STFT = modules.TorchSTFT(fft_size, hop_size, win_size)
-        self.conv_pre = Conv1d(initial_channel, dim, 7, 1, padding=3)
-        self.resblocks = nn.ModuleList(
-            getattr(modules, f"ConvNeXtBlock{resblock}")(
-                dim, intermediate_dim, kernel_size, gin_channels
-            ) for _ in range(num_blocks)
-        )
-
-        self.conv_post = nn.Sequential(
-            nn.PReLU(init=0.142),
-            Conv1d(dim, fft_size+2, 1),
-        )
-        
-        self.infer = self.forward
-
-    def forward(self, x, g):
-        x = self.conv_pre(x)
-        for i in range(self.num_blocks):
-            x = F.leaky_relu(x, modules.LRELU_SLOPE)
-            x = self.resblocks[i](x, g=g)
-        x = self.conv_post(x)
-        real, imag = torch.chunk(x, 2, dim=1)
-        return self.STFT.istft(real, imag).unsqueeze(1)
 
 
 class DiscriminatorP(nn.Module):
@@ -498,14 +430,6 @@ class SynthesizerTrn(nn.Module):
         upsample_initial_channel=None,
         upsample_kernel_sizes=None,
         upsample_channels=None,
-        dim_g=None,
-        intermediate_dim=None,
-        kernel_size_g=None,
-        num_blocks_g=None,
-        fft_size=None,
-        hop_size=None,
-        win_size=None,
-        generator="1",
         resblock="2", 
         ffn="FFN2",
         kernel_size_q=5,
@@ -529,19 +453,11 @@ class SynthesizerTrn(nn.Module):
         assert len(dilation_rate) == n_flows
         assert n_speakers > 1
         self.segment_size = segment_size
-        self.segment_size_add = 1 if generator in "23" else 0
         self.align_noise = align_noise
         self.align_noise_decay = align_noise_decay
         self.align_noise_min = align_noise_min
         
-        if generator == "1":
-            self.dec = Generator1(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
-        elif generator == "2":
-            self.dec = Generator2(inter_channels, fft_size, hop_size, win_size, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_channels, upsample_kernel_sizes, gin_channels=gin_channels)
-        elif generator == "3":
-            self.dec = Generator3(inter_channels, fft_size, hop_size, win_size, resblock, dim_g, intermediate_dim, kernel_size_g, num_blocks_g, gin_channels=gin_channels)
-        else:
-            raise ValueError(f"Unkown generator={generator}\n")
+        self.dec = Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
         self.enc_p = TextEncoder(text_channels, inter_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout, ffn=ffn, gin_channels=gin_channels)
         self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, kernel_size_q, 1, n_layers_q, gin_channels=0)
         self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, dilation_rate=dilation_rate, n_layers=4, n_flows=n_flows, gin_channels=gin_channels)
@@ -591,7 +507,7 @@ class SynthesizerTrn(nn.Module):
         m_p = torch.matmul(attn, m_p.transpose(1, 2)).transpose(1, 2)
         logs_p = torch.matmul(attn, logs_p.transpose(1, 2)).transpose(1, 2)
 
-        z_slice, ids_slice = commons.rand_slice_segments(z, y_lengths, self.segment_size+self.segment_size_add)
+        z_slice, ids_slice = commons.rand_slice_segments(z, y_lengths, self.segment_size)
         o = self.dec(z_slice, g=g)
 
         # forward generate

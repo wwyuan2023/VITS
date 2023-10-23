@@ -70,8 +70,8 @@ class MultiWaveDiscriminator(nn.Module):
             WaveDiscriminator(
                 2**i,
                 kernel_size,
-                layers,
-                conv_channels+i*32,
+                layers-i,
+                conv_channels+i*64,
                 use_weight_norm=use_weight_norm
             ) for i in range(num_dwt)
         ])
@@ -162,7 +162,7 @@ class MultiSTFTDiscriminator(nn.Module):
         fft_sizes=[128, 256, 512, 1024],
         hop_sizes=[32, 64, 128, 256],
         win_sizes=[128, 256, 512, 1024],
-        num_layers=[5, 6, 7, 8],
+        num_layers=[3, 4, 5, 6],
         kernel_sizes=[5, 5, 5, 5],
         conv_channels=[64, 64, 64, 64],
         use_weight_norm=False,
@@ -203,15 +203,15 @@ class MultiWaveSTFTDiscriminator(nn.Module):
         multi_wave_discriminator_params={
             "num_dwt": 5,
             "kernel_size": 5,
-            "layers": 10,
+            "layers": 8,
             "conv_channels": 64,
-            "use_weight_norm": False,
+            "use_weight_norm": True,
         },
         multi_stft_discriminator_params={
             "fft_sizes": [128, 256, 512, 1024, 2048],
             "hop_sizes": [32, 64, 128, 256, 512],
             "win_sizes": [128, 256, 512, 1024, 2048],
-            "num_layers": [5, 6, 7, 8, 9],
+            "num_layers": [3, 4, 5, 6, 7],
             "kernel_sizes": [5, 5, 5, 5, 5],
             "conv_channels": [64, 64, 64, 64, 64],
             "use_weight_norm": False,

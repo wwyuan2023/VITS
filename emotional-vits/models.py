@@ -124,10 +124,18 @@ class TextEncoder(nn.Module):
         self.p_dropout = p_dropout
 
         self.emb = nn.Sequential(
-            nn.Linear(in_channels, hidden_channels),
+            nn.Linear(in_channels, 1024),
+            nn.LayerNorm(1024),
+            weight_norm(nn.Linear(1024, hidden_channels)),
             nn.LayerNorm(hidden_channels),
         )
-        self.emo_proj = nn.Linear(1024, hidden_channels)
+        self.emo = nn.Sequential(
+            weight_norm(nn.Linear(1024, 32)),
+            nn.LayerNorm(32),
+            nn.Tanh(),
+            weight_norm(nn.Linear(32, hidden_channels)),
+            nn.LayerNorm(hidden_channels),
+        )
         
         # positional encoding
         self.register_buffer(
@@ -150,7 +158,6 @@ class TextEncoder(nn.Module):
         )
         self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
         
-        nn.init.xavier_uniform_(self.emo_proj.weight)
         nn.init.xavier_uniform_(self.proj.weight)
     
     def positional_encoding(self, x, alpha):
@@ -166,7 +173,7 @@ class TextEncoder(nn.Module):
 
     def forward(self, x, x_lengths, emo, g):
         x = self.emb(x) # [b, t, h]
-        x = x + self.emo_proj(emo).unsqueeze(1)
+        x = x + self.emo(emo).unsqueeze(1)
         x = self.positional_encoding(x, self.alpha)
         x = torch.transpose(x, 1, -1) # [b, h, t]
         x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
@@ -179,7 +186,7 @@ class TextEncoder(nn.Module):
     
     def infer(self, x, emo, g):
         x = self.emb(x)  # [b, t, h]
-        x = x + self.emo_proj(emo).unsqueeze(1)
+        x = x + self.emo(emo).unsqueeze(1)
         x = self.positional_encoding(x, self.alpha)
         x = torch.transpose(x, 1, -1) # [b, h, t]
         x = self.encoder.infer(x, g=g)
@@ -429,7 +436,6 @@ class SynthesizerTrn(nn.Module):
         upsample_rates=None,
         upsample_initial_channel=None,
         upsample_kernel_sizes=None,
-        upsample_channels=None,
         resblock="2", 
         ffn="FFN2",
         kernel_size_q=5,

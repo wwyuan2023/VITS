@@ -130,10 +130,7 @@ class TextEncoder(nn.Module):
             nn.LayerNorm(hidden_channels),
         )
         self.emo = nn.Sequential(
-            weight_norm(nn.Linear(1024, 32)),
-            nn.LayerNorm(32),
-            nn.Tanh(),
-            weight_norm(nn.Linear(32, hidden_channels)),
+            weight_norm(nn.Linear(1024, hidden_channels)),
             nn.LayerNorm(hidden_channels),
         )
         

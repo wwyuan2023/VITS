@@ -375,3 +375,27 @@ class ResidualCouplingLayer(nn.Module):
         return x
 
 
+class TorchSTFT(nn.Module):
+    def __init__(self, fft_size, hop_size, win_size=None):
+        super().__init__()
+        self.fft_size = fft_size
+        self.hop_size = hop_size
+        self.win_size = win_size if win_size is not None else fft_size
+        self.register_buffer("window", torch.hann_window(self.win_size), persistent=False)
+
+    def stft(self, x):
+        # x: (B, t)
+        spec = torch.stft(x,
+            n_fft=self.fft_size, hop_length=self.hop_size, 
+            win_length=self.win_size, window=self.window,
+            center=True, pad_mode='reflect', return_complex=False) # (B, F, T, 2), F=n_fft//2+1, T=t//hop_size+1
+        return spec[..., 0], spec[..., 1] # (B, F, T)
+
+    def istft(self, real, imag):
+        # real/imag: (B, F, T), n_fft//2+1
+        x = torch.istft(torch.complex(real, imag),
+            n_fft=self.fft_size, hop_length=self.hop_size, 
+            win_length=self.win_size, window=self.window,
+            center=True, return_complex=False)
+        return x # (B, t), t=(T-1)*hop_size
+

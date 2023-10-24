@@ -27,6 +27,6 @@ with open(scpfn, 'rt') as f:
         emo = np.fromfile(emofn, dtype=np.float32).reshape(1, 1024)
         code, _ = vq(emo, center)
         emo = center[code]
-        outfn = os.path.join(outdir, os.path.basename(emofn))
+        outfn = emofn + ".vq"
         emo.tofile(outfn)
         print(f"{code}, Output to {outfn}")

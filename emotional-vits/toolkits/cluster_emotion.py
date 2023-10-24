@@ -14,7 +14,7 @@ assert len(sys.argv) >= 4
 K = int(sys.argv[1])
 scpfn = sys.argv[2]
 outfn = sys.argv[3]
-nearest = True if len(sys.argv) > 4 else False
+N = float(sys.argv[4]) if len(sys.argv) > 4 else 1.0
 
 # load feature
 scplist = []
@@ -36,11 +36,11 @@ print("shuffle, len =", len(emo))
 
 # remove 10% of outliers
 mean = np.mean(emo)
-if False:
+if 0 < N < 1.0:
 	dist = np.linalg.norm(emo - mean, 2, -1)
 	x = np.argsort(dist)
 	emo = emo[x]
-	emo = emo[:int(0.9*len(emo))]
+	emo = emo[:int(N*len(emo))]
 	print("remove, len =", len(emo))
 
 # cluster

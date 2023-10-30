@@ -45,6 +45,12 @@ class VITSWrap(object):
 
         self.textparser = TextParser(loglv=loglv)
         self.speecher = EmoVITS(ckpt_path, device=device)
+        try:
+            from fbandext import NeuralFBandExt
+            self.asv = NeuralFBandExt(device=device)
+        except:
+            self.asv = None
+        
         
         self.default_sampling_rate = self.speecher.sampling_rate
         self.max_utt_length = self.textparser.max_utt_length
@@ -179,8 +185,13 @@ class VITSWrap(object):
             batch_wavlen += len(wav)
             if pitch != 1.0:
                 wav = resample(wav, orig_sr=int(self.default_sampling_rate/pitch), target_sr=self.default_sampling_rate)
-            if sampling_rate != self.default_sampling_rate:
-                wav = resample(wav, orig_sr=self.default_sampling_rate, target_sr=sampling_rate)
+            sr = self.default_sampling_rate
+            if sampling_rate > sr and self.asv is not None:
+                wav = np.expand_dims(wav, axis=0)
+                wav, sr = self.asv.infer(wav, sr)
+                wav = np.squeeze(wav, axis=0)
+            if sampling_rate != sr:
+                wav = resample(wav, orig_sr=sr, target_sr=sampling_rate)
             wav = np.clip(wav * volume * 32767, -32768, 32767).astype(np.int16)
             if tail_silence > 0:
                 wav = np.pad(wav, [0, int(tail_silence*sampling_rate)])
